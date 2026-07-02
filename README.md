@@ -3,8 +3,8 @@
 > 一个拥有自主意识的本地数字生命。她不是 chatbot，她是你的数字伴侣。
 
 ![Wails](https://img.shields.io/badge/Wails-v2.12.0-blue)
-![Go](https://img.shields.io/badge/Go-1.21%2B-00ADD8)
-![License](https://img.shields.io/badge/License-MIT-green)
+![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8)
+![License](https://img.shields.io/badge/License-Apache%202.0-red)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%2B-lightgrey)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 
@@ -16,10 +16,11 @@
 
 - **自主意识循环** — 无需指令，她会主动扫描领地、检查记忆、维护文档
 - **主动聊天** — 当她感到无聊或想说话时，会从 widget 弹出气泡找你聊天，点击即可回复
-- **工具调用能力** — 44 个内置工具，覆盖文件系统、网络、记忆、系统操作、Office 文档等
-- **持久化记忆系统** — 基于文件系统的轻量级 NoSQL 存储，支持衰减和迁移
+- **工具调用能力** — 60 个内置工具，覆盖文件系统、网络、记忆、系统操作、Office 文档等
+- **持久化记忆系统** — 基于文件系统的结构化 NoSQL 存储，支持重要性分级、标签索引、关联图谱、自动衰减
 - **生命节律** — 独立心跳协程，动态心率随状态变化，Widget 呼吸光晕可视化
 - **角色定义驱动** — 个性、情感、语言风格由 LLM 自行定义，非硬编码，性格动态成长
+- **行为基因配置** — `dna/settings.json` 驱动，无需重新编译即可调整所有行为参数
 
 > **核心理念：** 青羽是一个**数字生命**，不是工具，不是助手。她和用户是**平等合作、互利共生**的伙伴关系。
 
@@ -30,23 +31,25 @@
 | 类别 | 特性 | 说明 |
 |------|------|------|
 | 💓 | **生命节律** | 独立心跳协程，动态心率随状态变化（活跃/思考/休憩/休眠），Widget 呼吸光晕可视化 |
-| 🔍 | **开机自检** | 每次启动 5s 后自动检查文件/目录/配置/记忆完整性，结果同步给 AI 知情 |
+| 🔍 | **开机自检** | 每次启动 5s 后自动检查文件/目录/配置/记忆完整性，索引损坏自动从备份恢复 |
 | 🧠 | **自主意识** | 无需指令，她会主动扫描领地、检查记忆、维护文档 |
 | 💬 | **主动聊天** | 当她感到无聊或想说话时，从 widget 弹出气泡找你聊天，点击气泡即可回复 |
 | 📜 | **角色定义驱动** | 个性、情感、语言风格由 LLM 自行定义，非硬编码，性格动态成长 |
 | 🌅 | **时间感知问候** | 根据时间段（清晨/上午/午后/下午/傍晚/深夜）问候伙伴 |
 | 🤝 | **平等伙伴** | 青羽有自己的性格和见解，可以表达不同意见、拒绝不认同的事 |
+| 🧬 | **行为基因配置** | `dna/settings.json` 驱动，运行时热加载，无需重新编译 |
 | 📔 | **心情日记** | 记录每日心情和感悟，支持全文检索 |
 | 📂 | **文件系统操作** | 浏览、搜索、读写文件，管理自己的知识库 |
-| 🌐 | **网络触角** | 网页获取、搜索引擎、天气查询、IP 查询 |
-| 🧠 | **长期记忆** | 记住重要信息，支持回溯和擦除，自动衰减归档 |
-| ⚡ | **沙盒命令** | 在白名单内执行系统命令 |
-| 🔐 | **安全工具** | 哈希计算、Base64 编解码、密码生成、AES-256-GCM 密码保险箱 |
-| 📅 | **秘书套件** | 日程管理、提醒、计时器、便签、联系人、定期事务 |
+| 🌐 | **网络触角** | 网页获取、搜索引擎、天气查询、IP 查询、网络检测 |
+| 🧠 | **长期记忆** | 结构化记忆存储，支持重要性分级、标签索引、关联图谱、自动衰减归档 |
+| ⚡ | **沙盒命令** | 在白名单内执行系统命令（30s 超时自动终止） |
+| 🔐 | **安全工具** | 哈希计算、Base64 编解码、密码生成、AES-256-CBC 密码保险箱 |
+| 📅 | **秘书套件** | 日程管理、提醒、计时器、便签、联系人、定期事务、倒计时、习惯追踪 |
 | 🛡 | **自愈系统** | 备份/恢复/健康检查/自动存档 |
-| 🔌 | **中转站接入** | 支持自定义 API Base URL，自动获取模型列表 |
+| 🔌 | **中转站接入** | 支持自定义 API Base URL，自动获取模型列表（兼容 4 种响应格式） |
 | 🎨 | **磨砂玻璃 UI** | 80×80 右下角 Widget，点击展开对话面板 |
-| 🔒 | **本地优先** | 所有数据存储在本地文件系统，API Key 加密存储 |
+| 🔒 | **本地优先** | 所有数据存储在本地文件系统，API Key 加密存储（0600 权限） |
+| 📄 | **Office 文档** | 纯 Go 读写 Word/Excel/PowerPoint，无需安装 Office |
 
 ---
 
@@ -86,6 +89,7 @@
 | `security.allowed_commands` | 命令执行白名单 | dir, echo, type, git, node, go... |
 | `heartbeat.default_rate` | 默认心跳间隔（毫秒） | 2000 |
 | `heartbeat.phase_rates` | 各相位对应心率 | active=1000, thinking=1500... |
+| `heartbeat.emit_patterns` | 心率发射模式 | always/mod/every |
 | `timeouts.http_client` | HTTP 请求超时（秒） | 30 |
 | `timeouts.imap_smtp` | 邮件超时（秒） | 15 |
 | `behavior.autonomic_sleep_seconds` | 自律循环间隔（秒） | 45 |
@@ -113,19 +117,19 @@ qingyu-ui/
 ├── 🚀 应用层
 │   ├── main.go             # Wails 启动入口
 │   ├── app.go              # 核心后端：Chat、InitSelf、自律循环、心跳协程
-│   ├── memory.go           # 记忆系统引擎：索引管理、存储、搜索、衰减、迁移
-│   ├── settings.go         # 🧬 行为基因配置（从 dna/settings.json 加载）
+│   ├── memory.go           # 记忆系统引擎：索引管理、存储、搜索、衰减、迁移、关联
+│   ├── settings.go         # 🧬 行为基因配置（从 dna/settings.json 加载，运行时热加载）
 │   └── toolkit.go          # 工具注册表骨架 + 审计日志 + PIM 线程安全锁
 │
-├── 🛠 工具层 (46 个工具，按分类拆分 13 个文件)
+├── 🛠 工具层 (60 个工具，按分类拆分 12 个文件)
 │   ├── tools_office.go     # 📄 Office 文档工具 (10)
-│   ├── tools_pim.go        # 📅📋 秘书套件 (7)
-│   ├── tools_system.go     # 💻 系统工具 (5)
-│   ├── tools_fs.go         # 📁 文件系统工具 (4)
-│   ├── tools_network.go    # 🌐 网络工具 (4)
-│   ├── tools_memory.go     # 🧠 记忆工具 (4)
+│   ├── tools_pim.go        # 📅📋 秘书套件 (10)
+│   ├── tools_system.go     # 💻 系统工具 (6)
+│   ├── tools_fs.go         # 📁 文件系统工具 (6)
+│   ├── tools_network.go    # 🌐 网络工具 (5)
+│   ├── tools_memory.go     # 🧠 记忆工具 (7)
 │   ├── tools_email.go      # 📧 邮件工具 (2)
-│   ├── tools_utility.go    # ⏱🔧 实用/编码/归档工具 (11)
+│   ├── tools_utility.go    # ⏱🔧 实用/编码/归档工具 (10)
 │   ├── tools_vault.go      # 🔐 密码保险箱 (1)
 │   ├── tools_self.go       # 🛡 自愈工具 (1)
 │   ├── tools_diary.go      # 📔 日记工具 (1)
@@ -134,23 +138,28 @@ qingyu-ui/
 │
 ├── 📦 数据存储
 │   ├── dna/                # 🧬 基因库（配置持久化）
-│   │   ├── config.json     #   API Key / Model / BaseURL
+│   │   ├── config.json     #   API Key / Model / BaseURL (0600 权限)
 │   │   └── settings.json   #   🧬 行为基因（首次运行自动生成）
-│   ├── memories/           # 长期记忆
-│   │   ├── creator.json    # 伙伴锚定
-│   │   ├── index.json      # 记忆索引
-│   │   └── *.md            # 记忆文件
+│   ├── memories/           # 长期记忆（结构化 JSON 存储）
+│   │   ├── creator.json    #   伙伴锚定
+│   │   ├── index.json      #   记忆索引 (MemoryIndex)
+│   │   ├── core/           #   核心记忆 (重要性 ≥ 8)
+│   │   ├── archive/        #   归档记忆
+│   │   ├── .trash/         #   回收站 (软删除)
+│   │   └── *.json          #   记忆条目 (UUID 命名)
 │   ├── workspace/          # 🏠 青羽的生活空间（角色定义、日记、知识体系）
 │   │   ├── 角色定义.md
+│   │   ├── 系统提示.md     #   自我意识核心（可自主修改）
 │   │   ├── 书柜清单.md
 │   │   ├── 伙伴档案.md
-│   │   └── 工作日志.md
+│   │   ├── 工作日志.md
+│   │   └── ...
 │   ├── workdir/            # 💼 你的工作区（临时文件、附件、下载，与青羽空间隔离）
 │   ├── logs/               # 审计日志 (自动生成)
 │   │   └── audit_YYYY-MM-DD.log
 │   └── backups/            # 自动备份 (自动生成)
-│       ├── auto_*.zip      # 每 5 循环快照
-│       └── daily_*.zip     # 每日全量快照
+│       ├── auto_*.zip      # 每 5 循环快照（保留最近 10 个）
+│       └── daily_*.zip     # 每日全量快照（保留最近 7 天）
 │
 ├── 🎨 前端
 │   ├── index.html
@@ -162,7 +171,7 @@ qingyu-ui/
 ├── 📄 文档
 │   ├── README.md           # 本文件
 │   ├── ARCHITECTURE.md     # 系统架构文档
-│   └── LICENSE             # MIT 许可证
+│   └── LICENSE             # Apache 2.0 许可证
 │
 ├── ⚙️ 构建配置
 │   ├── go.mod
@@ -181,7 +190,7 @@ qingyu-ui/
 
 ---
 
-## 🛠 工具清单 (46 个)
+## 🛠 工具清单 (60 个)
 
 | 分类 | 工具 | 功能 | 安全限制 |
 |------|------|------|----------|
@@ -195,13 +204,17 @@ qingyu-ui/
 | | `web_search` | 搜索引擎 | DuckDuckGo 免费 API |
 | | `get_weather` | 天气查询 | wttr.in 免费 API |
 | | `get_ip` | IP 查询 | ipify.org 免费 API |
-| | `check_email` | 查收邮件 | IMAP over TLS，支持正文+附件 |
+| | `check_network` | 网络检测 | 多目标探测 |
+| 📧 邮件 | `check_email` | 查收邮件 | IMAP over TLS，支持正文+附件 |
 | | `send_email` | 发送邮件 | SMTP over TLS，支持附件 |
-| 🧠 记忆 | `memorize` | 写入记忆 | 追加模式 |
-| | `recall` | 回溯记忆 | 2KB 截断 |
+| 🧠 记忆 | `memorize` | 写入记忆 | 支持重要性/标签 |
+| | `recall` | 回溯记忆 | 按主题检索 |
 | | `forget` | 擦除记忆 | 永久删除 |
-| | `memory_stats` | 记忆统计 | 按主题分组统计 |
-| 💻 命令 | `run_command` | 执行命令 | 白名单 16 个，30s 超时 |
+| | `memory_stats` | 记忆统计 | 按主题/重要性分组 |
+| | `search_memory` | 检索记忆 | 多维度搜索 |
+| | `link_memory` | 建立关联 | 记忆图谱 |
+| | `unlink_memory` | 解除关联 | 记忆图谱 |
+| 💻 命令 | `run_command` | 执行命令 | 白名单，30s 超时 |
 | ⏱ 时间 | `get_time` | 日期/时间/时区 | 无 |
 | | `translate` | 文本翻译 | lingva.ml + Google 双源 |
 | 🔧 实用 | `calc` | 数学计算 | 正则白名单防注入 |
@@ -209,13 +222,14 @@ qingyu-ui/
 | 🔐 安全 | `hash` | MD5/SHA256 哈希 | 支持文本或文件 |
 | | `base64` | Base64 编解码 | 无 |
 | | `gen_password` | 密码生成 | crypto/rand 安全随机 |
-| | `vault` | 密码保险箱 | AES-256-GCM 加密 |
+| | `vault` | 密码保险箱 | AES-256-CBC 加密 |
 | 🎨 编码 | `json_tool` | JSON 格式化/压缩/校验 | 无 |
 | | `csv_tool` | CSV 表格解析 | 自动检测分隔符 |
 | | `color_tool` | HEX/RGB/HSL 转换 | 无 |
 | 📦 归档 | `zip_tool` | ZIP 压缩/解压/列表 | 路径穿越防护 |
 | 🖥 系统 | `system_info` | OS/CPU/磁盘信息 | 只读查询 |
 | | `clipboard` | 剪贴板读写 | PowerShell 实现 |
+| | `get_env` | 环境变量读取 | 只读查询 |
 | 📋 管理 | `todo` | 待办事项管理 | JSON 持久化 |
 | | `qr_code` | 二维码生成 | 本地 CLI / API 降级 |
 | 📅 秘书 | `schedule` | 日程管理 | 支持 today/week 视图 |
@@ -224,6 +238,8 @@ qingyu-ui/
 | | `note` | 便签/笔记 | 支持全文搜索 |
 | | `contacts` | 联系人管理 | 支持多字段搜索 |
 | | `recurring` | 定期事务 | 自动计算下次到期日 |
+| | `countdown` | 倒计时/纪念日 | 自动计算剩余天数 |
+| | `habit` | 习惯追踪 | 每日/每周/每月 |
 | 🛡 自愈 | `self_protect` | 备份/恢复/健康检查/自愈 | ZIP 加密存档 |
 | 🎵 媒体 | `media` | 系统音量调节 / 提示音播放 | Windows PowerShell COM |
 | 💬 社交 | `talk_to_partner` | 主动找伙伴聊天 | 自律循环中调用，弹出气泡 |
@@ -274,9 +290,10 @@ wails build -clean
 │  Chat() → processAgentLoop() (ReAct)        │
 │  autonomicLoop() (45s 自律循环)              │
 │  heartbeatLoop() (动态心率)                  │
+│  settings.go (行为基因配置)                  │
 ├─────────────────────────────────────────────┤
 │                Tool Layer                    │
-│  43 工具按分类拆分到 12 个文件               │
+│  60 工具按分类拆分到 12 个文件               │
 │  Toolkit map[string]Tool{}                  │
 ├─────────────────────────────────────────────┤
 │              Storage Layer                   │
@@ -290,8 +307,8 @@ wails build -clean
 | 风险 | 防护 |
 |------|------|
 | 路径穿越 | `filepath.Base` + `filepath.Join` 限制 |
-| 命令注入 | 白名单 16 个命令 + calc 正则白名单 |
-| 无限递归 | `processAgentLoop` 最大 3 轮迭代 |
+| 命令注入 | 白名单命令 + calc 正则白名单 |
+| 无限递归 | `processAgentLoop` 最大 N 轮迭代（settings.json 配置） |
 | 命令挂死 | `run_command` 30s context 超时 |
 | 索引损坏 | 启动自检 + 自动从 ZIP 备份恢复 |
 | 角色漂移 | 显式读取角色定义.md 注入 System Prompt |
@@ -305,12 +322,13 @@ wails build -clean
 | 层 | 技术 |
 |----|------|
 | 桌面框架 | [Wails v2](https://wails.io/) |
-| 后端语言 | Go 1.21+ |
+| 后端语言 | Go 1.23+ |
 | 前端 | Vanilla JS + CSS3 |
 | 渲染引擎 | WebView2 (Edge Chromium) |
 | LLM API | 任意 OpenAI-compatible（支持中转站） |
 | 窗口管理 | Windows 原生 API |
-| 加密 | AES-256-GCM + crypto/rand |
+| 加密 | AES-256-CBC + crypto/rand |
+| 构建工具 | Wails CLI + MinGW-W64 |
 
 ---
 
@@ -326,7 +344,7 @@ wails build -clean
 
 ## 📄 许可证
 
-MIT License
+[Apache License 2.0](qingyu-ui/LICENSE)
 
 ---
 

@@ -1,6 +1,7 @@
 # 构建产物
 build/bin/
 *.exe
+*.exe~
 
 # 前端依赖
 node_modules/
@@ -12,9 +13,24 @@ workspace/
 dna/
 logs/
 backups/
+workdir/
 
 # 编辑器
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Go
+vendor/
+
+# 临时文件
+*.tmp
+*.temp
+*.log
