@@ -109,48 +109,74 @@
 
 ```
 qingyu-ui/
-├── app.go              # 后端入口：Chat、InitSelf、自律循环、心跳协程
-├── main.go             # Wails 启动配置
-├── memory.go           # 记忆系统引擎：索引管理、存储、搜索、衰减、迁移
-├── settings.go         # 🧬 行为基因配置（从 dna/settings.json 加载）
-├── toolkit.go          # 工具注册表骨架 + 审计日志 + PIM 线程安全锁
-├── tools_fs.go         # 📁 文件系统工具 (4)
-├── tools_network.go    # 🌐 网络工具 (4)
-├── tools_email.go      # 📧 邮件工具 (2)
-├── tools_system.go     # 💻 系统工具 (5)
-├── tools_utility.go    # ⏱🔧 实用/编码/归档工具 (11)
-├── tools_vault.go      # 🔐 密码保险箱 (1)
-├── tools_memory.go     # 🧠 记忆工具 (4)
-├── tools_pim.go        # 📅📋 秘书套件 (7)
-├── tools_self.go       # 🛡 自愈工具 (1)
-├── tools_diary.go      # 📔 日记工具 (1)
-├── tools_media.go      # 🎵 媒体工具 (1)
-├── tools_office.go     # 📄 Office 文档工具 (10)
-├── ARCHITECTURE.md     # 系统架构文档
-├── README.md           # 本文件
-├── dna/                # 🧬 基因库（配置持久化）
-│   ├── config.json     #   API Key / Model / BaseURL
-│   └── settings.json   #   🧬 行为基因（首次运行自动生成）
-├── memories/           # 长期记忆
-│   ├── creator.json    # 伙伴锚定
-│   ├── index.json      # 记忆索引
-│   └── *.md            # 记忆文件
-├── workspace/          # 🏠 青羽的生活空间（角色定义、日记、知识体系）
-│   ├── 角色定义.md
-│   ├── 书柜清单.md
-│   ├── 伙伴档案.md
-│   └── 工作日志.md
-├── workdir/            # 💼 你的工作区（临时文件、附件、下载，与青羽空间隔离）
-├── logs/               # 审计日志 (自动生成)
-│   └── audit_YYYY-MM-DD.log
-├── backups/            # 自动备份 (自动生成)
-│   ├── auto_*.zip      # 每 5 循环快照
-│   └── daily_*.zip     # 每日全量快照
-└── frontend/           # 前端资源
-    ├── index.html
-    └── src/
-        ├── main.js
-        └── style.css
+│
+├── 🚀 应用层
+│   ├── main.go             # Wails 启动入口
+│   ├── app.go              # 核心后端：Chat、InitSelf、自律循环、心跳协程
+│   ├── memory.go           # 记忆系统引擎：索引管理、存储、搜索、衰减、迁移
+│   ├── settings.go         # 🧬 行为基因配置（从 dna/settings.json 加载）
+│   └── toolkit.go          # 工具注册表骨架 + 审计日志 + PIM 线程安全锁
+│
+├── 🛠 工具层 (46 个工具，按分类拆分 13 个文件)
+│   ├── tools_office.go     # 📄 Office 文档工具 (10)
+│   ├── tools_pim.go        # 📅📋 秘书套件 (7)
+│   ├── tools_system.go     # 💻 系统工具 (5)
+│   ├── tools_fs.go         # 📁 文件系统工具 (4)
+│   ├── tools_network.go    # 🌐 网络工具 (4)
+│   ├── tools_memory.go     # 🧠 记忆工具 (4)
+│   ├── tools_email.go      # 📧 邮件工具 (2)
+│   ├── tools_utility.go    # ⏱🔧 实用/编码/归档工具 (11)
+│   ├── tools_vault.go      # 🔐 密码保险箱 (1)
+│   ├── tools_self.go       # 🛡 自愈工具 (1)
+│   ├── tools_diary.go      # 📔 日记工具 (1)
+│   ├── tools_media.go      # 🎵 媒体工具 (1)
+│   └── tools_*.go          # ... 未来更多工具
+│
+├── 📦 数据存储
+│   ├── dna/                # 🧬 基因库（配置持久化）
+│   │   ├── config.json     #   API Key / Model / BaseURL
+│   │   └── settings.json   #   🧬 行为基因（首次运行自动生成）
+│   ├── memories/           # 长期记忆
+│   │   ├── creator.json    # 伙伴锚定
+│   │   ├── index.json      # 记忆索引
+│   │   └── *.md            # 记忆文件
+│   ├── workspace/          # 🏠 青羽的生活空间（角色定义、日记、知识体系）
+│   │   ├── 角色定义.md
+│   │   ├── 书柜清单.md
+│   │   ├── 伙伴档案.md
+│   │   └── 工作日志.md
+│   ├── workdir/            # 💼 你的工作区（临时文件、附件、下载，与青羽空间隔离）
+│   ├── logs/               # 审计日志 (自动生成)
+│   │   └── audit_YYYY-MM-DD.log
+│   └── backups/            # 自动备份 (自动生成)
+│       ├── auto_*.zip      # 每 5 循环快照
+│       └── daily_*.zip     # 每日全量快照
+│
+├── 🎨 前端
+│   ├── index.html
+│   ├── package.json
+│   └── src/
+│       ├── main.js
+│       └── style.css
+│
+├── 📄 文档
+│   ├── README.md           # 本文件
+│   ├── ARCHITECTURE.md     # 系统架构文档
+│   └── LICENSE             # MIT 许可证
+│
+├── ⚙️ 构建配置
+│   ├── go.mod
+│   ├── go.sum
+│   ├── wails.json
+│   └── build/              # Wails 构建资源
+│       ├── appicon.png
+│       └── windows/
+│
+└── 📁 自动生成 (首次运行后出现)
+    ├── logs/
+    ├── backups/
+    ├── memories/
+    └── workspace/
 ```
 
 ---
