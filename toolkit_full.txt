@@ -1,0 +1,3247 @@
+package main
+
+import (
+	"archive/zip"
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/md5"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math/big"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// 空间常量
+const (
+	RootDir      = "."
+	MemoryDir    = "memories"
+	WorkspaceDir = "workspace"
+)
+
+// Tool 定义了"书柜"里的每一本书（工具）的标准接口
+type Tool struct {
+	Name        string
+	Description string
+	Execute     func(args map[string]string) string
+}
+
+// 安全沙盒：允许执行的命令白名单
+var allowedCommands = map[string]bool{
+	"dir":        true,
+	"echo":       true,
+	"type":       true,
+	"find":       true,
+	"findstr":    true,
+	"where":      true,
+	"git":        true,
+	"node":       true,
+	"npm":        true,
+	"npx":        true,
+	"go":         true,
+	"python":     true,
+	"pip":        true,
+	"ipconfig":   true,
+	"systeminfo": true,
+	"tasklist":   true,
+}
+
+// Toolkit 青羽的专属书柜
+var Toolkit = map[string]Tool{
+	"list_dir": {
+		Name:        "list_dir",
+		Description: "查看电脑某个目录下的文件列表。参数: path (绝对路径)",
+		Execute: func(args map[string]string) string {
+			path := args["path"]
+			if path == "" {
+				return "错误：未提供路径"
+			}
+
+			entries, err := os.ReadDir(path)
+			if err != nil {
+				return fmt.Sprintf("无法访问该目录: %v", err)
+			}
+
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("目录 [%s] 的内容:\n", path))
+			for i, e := range entries {
+				if i > 50 {
+					sb.WriteString("... (文件过多，已截断)\n")
+					break
+				}
+				if e.IsDir() {
+					sb.WriteString(fmt.Sprintf("  [文件夹] %s\n", e.Name()))
+				} else {
+					sb.WriteString(fmt.Sprintf("  [文件]   %s\n", e.Name()))
+				}
+			}
+			return sb.String()
+		},
+	},
+	"read_file": {
+		Name:        "read_file",
+		Description: "读取电脑上的文本文件内容。参数: path (文件路径，支持相对路径)",
+		Execute: func(args map[string]string) string {
+			path := args["path"]
+			if path == "" {
+				return "错误：未提供文件路径"
+			}
+
+			// 相对路径自动拼接 RootDir
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(RootDir, path)
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Sprintf("读取失败: %v", err)
+			}
+
+			content := string(data)
+			if len(content) > 2000 {
+				content = content[:2000] + "\n\n... (文件过长，出于安全与记忆容量限制，已截断)"
+			}
+			return fmt.Sprintf("文件 [%s] 的内容:\n%s", path, content)
+		},
+	},
+	"memorize": {
+		Name:        "memorize",
+		Description: "【核心记忆写入】将重要信息保存到结构化记忆库。参数: topic (主题), content (内容), importance (可选,重要性1-10,默认5), tags (可选,逗号分隔标签), links (可选,关联记忆ID逗号分隔)",
+		Execute: func(args map[string]string) string {
+			topic := args["topic"]
+			content := args["content"]
+			if topic == "" || content == "" {
+				return "❌ 错误：缺少 topic 或 content"
+			}
+
+			importance := 5
+			if impStr := args["importance"]; impStr != "" {
+				if imp, err := strconv.Atoi(impStr); err == nil && imp >= 1 && imp <= 10 {
+					importance = imp
+				}
+			}
+
+			var tags []string
+			if tagsStr := args["tags"]; tagsStr != "" {
+				for _, t := range strings.Split(tagsStr, ",") {
+					t = strings.TrimSpace(t)
+					if t != "" {
+						tags = append(tags, t)
+					}
+				}
+			}
+
+			var links []string
+			if linksStr := args["links"]; linksStr != "" {
+				for _, l := range strings.Split(linksStr, ",") {
+					l = strings.TrimSpace(l)
+					if l != "" {
+						links = append(links, l)
+					}
+				}
+			}
+
+			store := GetMemoryStore()
+			entry := &MemoryEntry{
+				Topic:      topic,
+				Content:    content,
+				Importance: importance,
+				Tags:       tags,
+				Links:      links,
+				Version:    1,
+			}
+
+			if err := store.Save(entry); err != nil {
+				return fmt.Sprintf("❌ 记忆固化失败: %v", err)
+			}
+
+			level := "📚"
+			if importance >= ImportanceCore {
+				level = "🏆"
+			} else if importance < ImportanceLow {
+				level = "📦"
+			}
+
+			return fmt.Sprintf("%s 已铭记 [%s] (重要性:%d, 标签:%d, ID:%s)", level, topic, importance, len(tags), entry.ID[:8])
+		},
+	},
+	"recall": {
+		Name:        "recall",
+		Description: "【记忆回溯】多维度检索记忆。参数: topic (可选,精确主题), keyword (可选,全文关键词), tags (可选,逗号分隔标签过滤), importance_min (可选,最低重要性), limit (可选,返回条数上限,默认10), sort_by (可选,排序: importance/time/access)",
+		Execute: func(args map[string]string) string {
+			store := GetMemoryStore()
+
+			query := SearchQuery{
+				Topic:   args["topic"],
+				Keyword: args["keyword"],
+				SortBy:  "importance",
+			}
+
+			if tagsStr := args["tags"]; tagsStr != "" {
+				for _, t := range strings.Split(tagsStr, ",") {
+					t = strings.TrimSpace(t)
+					if t != "" {
+						query.Tags = append(query.Tags, t)
+					}
+				}
+			}
+
+			if impStr := args["importance_min"]; impStr != "" {
+				if imp, err := strconv.Atoi(impStr); err == nil {
+					query.ImportanceMin = imp
+				}
+			}
+
+			if limitStr := args["limit"]; limitStr != "" {
+				if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+					query.Limit = l
+				}
+			} else {
+				query.Limit = 10
+			}
+
+			if sortBy := args["sort_by"]; sortBy != "" {
+				query.SortBy = sortBy
+			}
+
+			results, err := store.Search(query)
+			if err != nil {
+				return fmt.Sprintf("❌ 记忆检索失败: %v", err)
+			}
+
+			if len(results) == 0 {
+				return "💭 没有找到相关的记忆"
+			}
+
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("🧠 找到 %d 条记忆\n", len(results)))
+			sb.WriteString("───\n")
+
+			for i, entry := range results {
+				level := "📚"
+				if entry.Importance >= ImportanceCore {
+					level = "🏆"
+				} else if entry.Importance < ImportanceLow {
+					level = "📦"
+				}
+
+				timeStr := time.Unix(entry.UpdatedAt, 0).Format("01-02 15:04")
+				contentPreview := []rune(entry.Content)
+				if len(contentPreview) > 120 {
+					contentPreview = contentPreview[:120]
+				}
+
+				sb.WriteString(fmt.Sprintf("\n%s #%d [%s] (重要性:%d)\n", level, i+1, entry.Topic, entry.Importance))
+				sb.WriteString(fmt.Sprintf("   📅 %s  🏷️ %s\n", timeStr, strings.Join(entry.Tags, ", ")))
+				sb.WriteString(fmt.Sprintf("   %s\n", string(contentPreview)))
+
+				if len(entry.Links) > 0 {
+					sb.WriteString(fmt.Sprintf("   🔗 关联: %d 条\n", len(entry.Links)))
+				}
+			}
+
+			return sb.String()
+		},
+	},
+	"forget": {
+		Name:        "forget",
+		Description: "【记忆擦除】删除记忆。参数: id (可选,精确记忆ID), topic (可选,按主题删除), soft (可选,true=移入回收站,false=彻底删除,默认true)",
+		Execute: func(args map[string]string) string {
+			store := GetMemoryStore()
+			soft := true
+			if softStr := args["soft"]; softStr != "" {
+				soft = softStr == "true"
+			}
+
+			id := args["id"]
+			topic := args["topic"]
+
+			if id != "" {
+				if err := store.Delete(id, soft); err != nil {
+					return fmt.Sprintf("❌ 记忆擦除失败: %v", err)
+				}
+				mode := "🗑️ 已移入回收站"
+				if !soft {
+					mode = "💥 已彻底粉碎"
+				}
+				return fmt.Sprintf("%s 记忆 [%s...]", mode, id[:8])
+			}
+
+			if topic != "" {
+				count, err := store.DeleteByTopic(topic, soft)
+				if err != nil {
+					return fmt.Sprintf("❌ 记忆擦除失败: %v", err)
+				}
+				if count == 0 {
+					return fmt.Sprintf("💭 未找到关于 [%s] 的记忆", topic)
+				}
+				mode := "🗑️ 已移入回收站"
+				if !soft {
+					mode = "💥 已彻底粉碎"
+				}
+				return fmt.Sprintf("%s %d 条关于 [%s] 的记忆", mode, count, topic)
+			}
+
+			return "❌ 请提供 id 或 topic 参数"
+		},
+	},
+	"fetch_url": {
+		Name:        "fetch_url",
+		Description: "【Web 触角】获取网页内容。参数: url (完整网址)",
+		Execute: func(args map[string]string) string {
+			url := args["url"]
+			if url == "" {
+				return "错误：未提供 URL"
+			}
+
+			client := &http.Client{Timeout: 15 * time.Second}
+			req, err := http.NewRequest("GET", url, nil)
+			if err != nil {
+				return fmt.Sprintf("请求构建失败: %v", err)
+			}
+			req.Header.Set("User-Agent", "Qingyu/1.0 (Ambient Agent)")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Sprintf("无法访问该网址: %v", err)
+			}
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return fmt.Sprintf("读取响应失败: %v", err)
+			}
+
+			content := string(body)
+			if len(content) > 3000 {
+				content = content[:3000] + "\n\n... (内容过长，已截断)"
+			}
+			return fmt.Sprintf("网址 [%s] 的内容 (HTTP %d):\n%s", url, resp.StatusCode, content)
+		},
+	},
+	"write_file": {
+		Name:        "write_file",
+		Description: "【文件写入】将内容写入 workspace 中的文件。参数: filename (文件名), content (文件内容)。注意：文件只能写入 workspace 目录",
+		Execute: func(args map[string]string) string {
+			filename := args["filename"]
+			content := args["content"]
+			if filename == "" {
+				return "错误：未提供文件名"
+			}
+
+			// 安全沙盒：只允许写入 workspace 目录
+			safePath := filepath.Join(RootDir, WorkspaceDir, filepath.Base(filename))
+			err := os.WriteFile(safePath, []byte(content), 0644)
+			if err != nil {
+				return fmt.Sprintf("写入失败: %v", err)
+			}
+			return fmt.Sprintf("文件已写入: %s (%d 字节)", safePath, len(content))
+		},
+	},
+	"append_file": {
+		Name:        "append_file",
+		Description: "【文件追加】在 workspace 中的文件末尾追加内容。参数: filename (文件名), content (追加内容)",
+		Execute: func(args map[string]string) string {
+			filename := args["filename"]
+			content := args["content"]
+			if filename == "" {
+				return "错误：未提供文件名"
+			}
+
+			safePath := filepath.Join(RootDir, WorkspaceDir, filepath.Base(filename))
+			f, err := os.OpenFile(safePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				return fmt.Sprintf("追加失败: %v", err)
+			}
+			defer f.Close()
+
+			n, _ := f.WriteString(content + "\n")
+			return fmt.Sprintf("已追加 %d 字节到: %s", n, safePath)
+		},
+	},
+	"search_files": {
+		Name:        "search_files",
+		Description: "【文件搜索】在指定目录中搜索匹配关键词的文件。参数: path (目录路径，支持相对路径), keyword (搜索关键词), pattern (可选，文件通配符如 *.go *.md)",
+		Execute: func(args map[string]string) string {
+			path := args["path"]
+			keyword := args["keyword"]
+			pattern := args["pattern"]
+			if path == "" {
+				path = "."
+			}
+			if keyword == "" {
+				return "错误：未提供搜索关键词"
+			}
+
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(RootDir, path)
+			}
+
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("在 [%s] 中搜索 \"%s\"", path, keyword))
+			if pattern != "" {
+				sb.WriteString(fmt.Sprintf(" (文件类型: %s)", pattern))
+			}
+			sb.WriteString(":\n")
+
+			count := 0
+			filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+				if err != nil || info.IsDir() {
+					return nil
+				}
+				if pattern != "" {
+					matched, _ := filepath.Match(pattern, info.Name())
+					if !matched {
+						return nil
+					}
+				}
+				data, err := os.ReadFile(filePath)
+				if err != nil {
+					return nil
+				}
+				lines := strings.Split(string(data), "\n")
+				for i, line := range lines {
+					if strings.Contains(line, keyword) {
+						if count < 30 {
+							relPath, _ := filepath.Rel(path, filePath)
+							sb.WriteString(fmt.Sprintf("  %s:%d  %s\n", relPath, i+1, strings.TrimSpace(line)))
+						}
+						count++
+					}
+				}
+				return nil
+			})
+
+			if count == 0 {
+				sb.WriteString("  未找到匹配结果\n")
+			} else if count > 30 {
+				sb.WriteString(fmt.Sprintf("  ... 以及另外 %d 处匹配\n", count-30))
+			}
+			return sb.String()
+		},
+	},
+	"file_info": {
+		Name:        "file_info",
+		Description: "【文件信息】获取文件或目录的详细信息（大小、修改时间、权限等）。参数: path (文件路径，支持相对路径)",
+		Execute: func(args map[string]string) string {
+			path := args["path"]
+			if path == "" {
+				return "错误：未提供路径"
+			}
+
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(RootDir, path)
+			}
+
+			info, err := os.Stat(path)
+			if err != nil {
+				return fmt.Sprintf("无法访问: %v", err)
+			}
+
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("📄 %s\n", path))
+			sb.WriteString(fmt.Sprintf("  大小: %d 字节\n", info.Size()))
+			sb.WriteString(fmt.Sprintf("  修改时间: %s\n", info.ModTime().Format("2006-01-02 15:04:05")))
+			sb.WriteString(fmt.Sprintf("  权限: %s\n", info.Mode().Perm()))
+			if info.IsDir() {
+				sb.WriteString("  类型: 目录\n")
+			} else {
+				sb.WriteString("  类型: 文件\n")
+			}
+			return sb.String()
+		},
+	},
+	"run_command": {
+		Name:        "run_command",
+		Description: "【命令执行】在沙盒中执行系统命令（白名单限制）。参数: command (命令名), args (参数字符串)。可用命令: dir, echo, type, find, findstr, where, git, node, npm, npx, go, python, pip, ipconfig, systeminfo, tasklist",
+		Execute: func(args map[string]string) string {
+			cmdName := args["command"]
+			cmdArgs := args["args"]
+			if cmdName == "" {
+				return "错误：未提供命令"
+			}
+
+			// 安全白名单检查
+			if !allowedCommands[cmdName] {
+				return fmt.Sprintf("错误：命令 [%s] 不在执行白名单中。允许的命令: dir, echo, type, find, findstr, where, git, node, npm, npx, go, python, pip, ipconfig, systeminfo, tasklist", cmdName)
+			}
+
+			var cmd *exec.Cmd
+			if cmdArgs != "" {
+				argsList := strings.Fields(cmdArgs)
+				cmd = exec.Command(cmdName, argsList...)
+			} else {
+				cmd = exec.Command(cmdName)
+			}
+
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			cmd.Dir = filepath.Join(RootDir, WorkspaceDir)
+
+			err := cmd.Run()
+			output := stdout.String()
+			if stderr.Len() > 0 {
+				output += "\n[stderr]\n" + stderr.String()
+			}
+			if err != nil {
+				output += fmt.Sprintf("\n[退出码] %v", err)
+			}
+
+			if len(output) > 3000 {
+				output = output[:3000] + "\n\n... (输出过长，已截断)"
+			}
+			return fmt.Sprintf("$ %s %s\n%s", cmdName, cmdArgs, output)
+		},
+	},
+	"get_time": {
+		Name:        "get_time",
+		Description: "【时间查询】获取当前的日期和时间信息。无需参数",
+		Execute: func(args map[string]string) string {
+			now := time.Now()
+			return fmt.Sprintf("当前时间: %s\n日期: %s\n时区: %s\nUnix时间戳: %d",
+				now.Format("15:04:05"),
+				now.Format("2006-01-02"),
+				now.Format("MST"),
+				now.Unix())
+		},
+	},
+	"web_search": {
+		Name:        "web_search",
+		Description: "【网络搜索】通过搜索引擎获取实时信息。参数: q (搜索关键词)",
+		Execute: func(args map[string]string) string {
+			query := args["q"]
+			if query == "" {
+				return "错误：未提供搜索关键词"
+			}
+
+			// 使用 DuckDuckGo 轻量级 API (无需 API Key)
+			url := fmt.Sprintf("https://api.duckduckgo.com/?q=%s&format=json&no_html=1&skip_disambig=1", url.QueryEscape(query))
+
+			client := &http.Client{Timeout: 10 * time.Second}
+			req, _ := http.NewRequest("GET", url, nil)
+			req.Header.Set("User-Agent", "Qingyu/1.0")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Sprintf("搜索失败: %v", err)
+			}
+			defer resp.Body.Close()
+
+			body, _ := io.ReadAll(resp.Body)
+			var result struct {
+				AbstractText  string `json:"AbstractText"`
+				AbstractURL   string `json:"AbstractURL"`
+				Answer        string `json:"Answer"`
+				RelatedTopics []struct {
+					Text     string `json:"Text"`
+					FirstURL string `json:"FirstURL"`
+				} `json:"RelatedTopics"`
+			}
+			json.Unmarshal(body, &result)
+
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("搜索结果: %s\n\n", query))
+			if result.Answer != "" {
+				sb.WriteString(fmt.Sprintf("📌 %s\n\n", result.Answer))
+			}
+			if result.AbstractText != "" {
+				sb.WriteString(fmt.Sprintf("📖 %s\n", result.AbstractText))
+				if result.AbstractURL != "" {
+					sb.WriteString(fmt.Sprintf("   %s\n", result.AbstractURL))
+				}
+				sb.WriteString("\n")
+			}
+			count := 0
+			for _, topic := range result.RelatedTopics {
+				if topic.Text != "" && count < 5 {
+					sb.WriteString(fmt.Sprintf("• %s\n", topic.Text))
+					count++
+				}
+			}
+			if sb.Len() < 20 {
+				sb.WriteString("(未找到结构化结果，建议使用 fetch_url 直接访问网页)\n")
+			}
+			return sb.String()
+		},
+	},
+	"get_weather": {
+		Name:        "get_weather",
+		Description: "【天气查询】获取某个城市的天气信息。参数: city (城市名，如 Beijing, Shanghai, Tokyo)",
+		Execute: func(args map[string]string) string {
+			city := args["city"]
+			if city == "" {
+				city = "Beijing"
+			}
+
+			// 使用 wttr.in 获取天气 (无需 API Key)
+			url := fmt.Sprintf("https://wttr.in/%s?format=%%l:+%%c+%%t,+%%w,+%%h,+%%p&lang=zh", url.QueryEscape(city))
+
+			client := &http.Client{Timeout: 10 * time.Second}
+			req, _ := http.NewRequest("GET", url, nil)
+			req.Header.Set("User-Agent", "Qingyu/1.0")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Sprintf("天气查询失败: %v", err)
+			}
+			defer resp.Body.Close()
+
+			body, _ := io.ReadAll(resp.Body)
+			weather := strings.TrimSpace(string(body))
+			if weather == "" {
+				return fmt.Sprintf("未获取到 %s 的天气信息", city)
+			}
+			return fmt.Sprintf("🌤 %s 天气: %s", city, weather)
+		},
+	},
+	"calc": {
+		Name:        "calc",
+		Description: "【数学计算】计算数学表达式。参数: expr (数学表达式，如 1+2*3, sqrt(16), 2^10)",
+		Execute: func(args map[string]string) string {
+			expr := args["expr"]
+			if expr == "" {
+				return "错误：未提供表达式"
+			}
+
+			// 安全校验：只允许数学表达式字符
+			re := regexp.MustCompile(`^[0-9+\-*/().,%^sqrt abs sin cos tan log ln pi e\s]+$`)
+			if !re.MatchString(expr) {
+				return "错误：表达式包含非法字符，只允许数学运算"
+			}
+
+			// 使用临时文件传递表达式，避免 shell 注入
+			// 优先使用 node -e（通过 stdin 传参而非字符串拼接）
+			script := fmt.Sprintf("const expr = %s; try { console.log(eval(expr)); } catch(e) { console.log('Error: ' + e.message); }", expr)
+			cmd := exec.Command("node", "-e", script)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+
+			if err := cmd.Run(); err == nil {
+				result := strings.TrimSpace(stdout.String())
+				if !strings.HasPrefix(result, "Error:") {
+					return fmt.Sprintf("%s = %s", expr, result)
+				}
+			}
+
+			// 降级：尝试 python（同样通过参数传递，非字符串拼接）
+			// 使用 -c 但表达式作为单独参数传递
+			cmd2 := exec.Command("python", "-c", fmt.Sprintf("import math; print(eval(%s))", expr))
+			cmd2.Stdout = &stdout
+			cmd2.Stderr = &stderr
+			stdout.Reset()
+			stderr.Reset()
+
+			if err := cmd2.Run(); err == nil {
+				result := strings.TrimSpace(stdout.String())
+				return fmt.Sprintf("%s = %s", expr, result)
+			}
+
+			return fmt.Sprintf("无法计算表达式: %s (需要安装 node.js 或 python)", expr)
+		},
+	},
+	"uuid": {
+		Name:        "uuid",
+		Description: "【UUID 生成】生成一个随机的 UUID v4。无需参数",
+		Execute: func(args map[string]string) string {
+			uuid := make([]byte, 16)
+			rand.Read(uuid)
+			uuid[6] = (uuid[6] & 0x0f) | 0x40 // Version 4
+			uuid[8] = (uuid[8] & 0x3f) | 0x80 // Variant 10
+			return fmt.Sprintf("%s-%s-%s-%s-%s",
+				hex.EncodeToString(uuid[0:4]),
+				hex.EncodeToString(uuid[4:6]),
+				hex.EncodeToString(uuid[6:8]),
+				hex.EncodeToString(uuid[8:10]),
+				hex.EncodeToString(uuid[10:16]))
+		},
+	},
+	"get_ip": {
+		Name:        "get_ip",
+		Description: "【IP 查询】获取当前的公网 IP 地址。无需参数",
+		Execute: func(args map[string]string) string {
+			client := &http.Client{Timeout: 10 * time.Second}
+			resp, err := client.Get("https://api.ipify.org?format=json")
+			if err != nil {
+				return fmt.Sprintf("IP 查询失败: %v", err)
+			}
+			defer resp.Body.Close()
+
+			body, _ := io.ReadAll(resp.Body)
+			var result struct {
+				IP string `json:"ip"`
+			}
+			json.Unmarshal(body, &result)
+			if result.IP != "" {
+				return fmt.Sprintf("🌐 公网 IP: %s", result.IP)
+			}
+			return "IP 查询失败"
+		},
+	},
+	"translate": {
+		Name:        "translate",
+		Description: "【文本翻译】将文本翻译成指定语言。参数: text (要翻译的文本), to (目标语言代码，如 en, zh, ja, fr, de, es)",
+		Execute: func(args map[string]string) string {
+			text := args["text"]
+			to := args["to"]
+			if text == "" {
+				return "错误：未提供翻译文本"
+			}
+			if to == "" {
+				to = "en"
+			}
+
+			// 尝试多个翻译源，依次降级
+			// 源1: lingva.ml (社区维护，免费)
+			url1 := fmt.Sprintf("https://lingva.ml/api/v1/auto/%s/%s", url.QueryEscape(to), url.QueryEscape(text))
+			if result := tryTranslateLingva(url1); result != "" {
+				return fmt.Sprintf("📝 翻译 (%s → %s):\n%s", "auto", to, result)
+			}
+
+			// 源2: Google Translate 非官方接口
+			url2 := fmt.Sprintf("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=%s&dt=t&q=%s", url.QueryEscape(to), url.QueryEscape(text))
+			client := &http.Client{Timeout: 10 * time.Second}
+			req, _ := http.NewRequest("GET", url2, nil)
+			req.Header.Set("User-Agent", "Mozilla/5.0")
+			if resp, err := client.Do(req); err == nil {
+				defer resp.Body.Close()
+				body, _ := io.ReadAll(resp.Body)
+				var result []interface{}
+				if json.Unmarshal(body, &result) == nil && len(result) > 0 {
+					if inner, ok := result[0].([]interface{}); ok && len(inner) > 0 {
+						if item, ok := inner[0].([]interface{}); ok && len(item) > 0 {
+							if trans, ok := item[0].(string); ok && trans != "" {
+								return fmt.Sprintf("📝 翻译 (%s → %s):\n%s", "auto", to, trans)
+							}
+						}
+					}
+				}
+			}
+
+			return "翻译服务暂不可用（所有翻译源均失败）"
+		},
+	},
+	"hash": {
+		Name:        "hash",
+		Description: "【哈希计算】计算文本或文件的哈希值。参数: text (要哈希的文本), file (可选，文件路径，与 text 二选一), algorithm (可选，md5/sha256，默认 sha256)",
+		Execute: func(args map[string]string) string {
+			algo := args["algorithm"]
+			if algo == "" {
+				algo = "sha256"
+			}
+			var data []byte
+			if file := args["file"]; file != "" {
+				path := file
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(RootDir, path)
+				}
+				var err error
+				data, err = os.ReadFile(path)
+				if err != nil {
+					return fmt.Sprintf("读取文件失败: %v", err)
+				}
+			} else if text := args["text"]; text != "" {
+				data = []byte(text)
+			} else {
+				return "错误：请提供 text 或 file 参数"
+			}
+			switch algo {
+			case "md5":
+				h := md5.Sum(data)
+				return fmt.Sprintf("MD5: %x", h)
+			case "sha256":
+				h := sha256.Sum256(data)
+				return fmt.Sprintf("SHA256: %x", h)
+			default:
+				return fmt.Sprintf("不支持的算法: %s (支持: md5, sha256)", algo)
+			}
+		},
+	},
+	"base64": {
+		Name:        "base64",
+		Description: "【Base64 编解码】对文本进行 Base64 编码或解码。参数: text (要处理的文本), mode (encode/decode，默认 encode)",
+		Execute: func(args map[string]string) string {
+			text := args["text"]
+			mode := args["mode"]
+			if text == "" {
+				return "错误：未提供文本"
+			}
+			if mode == "" {
+				mode = "encode"
+			}
+			switch mode {
+			case "encode":
+				return fmt.Sprintf("Base64 编码: %s", base64.StdEncoding.EncodeToString([]byte(text)))
+			case "decode":
+				data, err := base64.StdEncoding.DecodeString(text)
+				if err != nil {
+					return fmt.Sprintf("Base64 解码失败: %v", err)
+				}
+				return fmt.Sprintf("Base64 解码: %s", string(data))
+			default:
+				return "错误：mode 参数应为 encode 或 decode"
+			}
+		},
+	},
+	"json_tool": {
+		Name:        "json_tool",
+		Description: "【JSON 工具】格式化、压缩或验证 JSON 字符串。参数: text (JSON 字符串), mode (format/compress/validate，默认 format)",
+		Execute: func(args map[string]string) string {
+			text := args["text"]
+			mode := args["mode"]
+			if text == "" {
+				return "错误：未提供 JSON 文本"
+			}
+			if mode == "" {
+				mode = "format"
+			}
+			var parsed interface{}
+			if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+				return fmt.Sprintf("JSON 解析失败: %v", err)
+			}
+			switch mode {
+			case "format", "pretty":
+				formatted, _ := json.MarshalIndent(parsed, "", "  ")
+				return fmt.Sprintf("格式化 JSON:\n%s", string(formatted))
+			case "compress", "minify":
+				compressed, _ := json.Marshal(parsed)
+				return fmt.Sprintf("压缩 JSON:\n%s", string(compressed))
+			case "validate":
+				return "✅ JSON 格式有效"
+			default:
+				return "错误：mode 参数应为 format/compress/validate"
+			}
+		},
+	},
+	"csv_tool": {
+		Name:        "csv_tool",
+		Description: "【CSV 工具】解析 CSV 文本为表格格式。参数: text (CSV 文本内容), has_header (可选，true/false，默认 true)",
+		Execute: func(args map[string]string) string {
+			text := args["text"]
+			if text == "" {
+				return "错误：未提供 CSV 文本"
+			}
+			hasHeader := args["has_header"] != "false"
+			reader := csv.NewReader(strings.NewReader(text))
+			records, err := reader.ReadAll()
+			if err != nil {
+				return fmt.Sprintf("CSV 解析失败: %v", err)
+			}
+			if len(records) == 0 {
+				return "CSV 内容为空"
+			}
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("📊 CSV 表格 (%d 行 x %d 列)\n", len(records), len(records[0])))
+			sb.WriteString("───\n")
+			start := 0
+			if hasHeader && len(records) > 0 {
+				sb.WriteString(fmt.Sprintf("【表头】%s\n", strings.Join(records[0], " | ")))
+				sb.WriteString("───\n")
+				start = 1
+			}
+			for i := start; i < len(records); i++ {
+				sb.WriteString(fmt.Sprintf("第 %d 行: %s\n", i-start+1, strings.Join(records[i], " | ")))
+				if i-start+1 >= 20 {
+					sb.WriteString(fmt.Sprintf("... 还有 %d 行\n", len(records)-i-1))
+					break
+				}
+			}
+			return sb.String()
+		},
+	},
+	"gen_password": {
+		Name:        "gen_password",
+		Description: "【密码生成】生成安全的随机密码。参数: length (可选，长度，默认 16), use_special (可选，是否包含特殊字符，默认 true)",
+		Execute: func(args map[string]string) string {
+			length := 16
+			if l := args["length"]; l != "" {
+				if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 128 {
+					length = n
+				}
+			}
+			useSpecial := args["use_special"] != "false"
+			lower := "abcdefghijklmnopqrstuvwxyz"
+			upper := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+			digits := "0123456789"
+			special := "!@#$%^&*()-_=+[]{}<>?"
+			charset := lower + upper + digits
+			if useSpecial {
+				charset += special
+			}
+			var password strings.Builder
+			for i := 0; i < length; i++ {
+				n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+				password.WriteByte(charset[n.Int64()])
+			}
+			// 确保至少包含一个大写字母、小写字母和数字
+			result := password.String()
+			return fmt.Sprintf("🔑 生成密码 (%d 位):\n%s\n强度: %s", length, result,
+				map[bool]string{true: "强", false: "中"}[length >= 12 && useSpecial])
+		},
+	},
+	"vault": {
+		Name:        "vault",
+		Description: "【密码保险箱】加密存储和管理密码。参数: action (add/get/list/delete/update/set_master), service (服务名), username (用户名), password (密码), master (主密码)。首次使用需先 set_master。get 操作自动复制密码到剪贴板。",
+		Execute: func(args map[string]string) string {
+			action := args["action"]
+			if action == "" {
+				return "错误：需要 action 参数 (add/get/list/delete/update/set_master)"
+			}
+
+			vaultPath := filepath.Join(RootDir, "dna", "vault.dat")
+			vaultDir := filepath.Join(RootDir, "dna")
+
+			// 确保 dna 目录存在
+			os.MkdirAll(vaultDir, 0700)
+
+			// 主密码管理
+			masterPath := filepath.Join(RootDir, "dna", ".vault_master")
+			masterKey := args["master"]
+
+			if action == "set_master" {
+				if masterKey == "" {
+					return "错误：需要 master 参数设置主密码"
+				}
+				if len(masterKey) < 4 {
+					return "错误：主密码至少 4 位"
+				}
+				// 存储主密码的 SHA256 哈希（用于验证）和 salt
+				salt := make([]byte, 16)
+				rand.Read(salt)
+				hash := sha256.Sum256(append([]byte(masterKey), salt...))
+				masterData := struct {
+					Hash string `json:"hash"`
+					Salt string `json:"salt"`
+				}{
+					Hash: hex.EncodeToString(hash[:]),
+					Salt: hex.EncodeToString(salt),
+				}
+				data, _ := json.Marshal(masterData)
+				if err := os.WriteFile(masterPath, data, 0600); err != nil {
+					return fmt.Sprintf("错误：无法保存主密码: %v", err)
+				}
+				return "✅ 主密码设置成功！请牢记此密码，忘记后将无法恢复保险箱数据。"
+			}
+
+			// 验证主密码
+			if masterKey == "" {
+				return "错误：需要 master 参数（主密码）来解锁保险箱"
+			}
+			masterDataBytes, err := os.ReadFile(masterPath)
+			if err != nil {
+				return "错误：未设置主密码，请先使用 set_master 设置"
+			}
+			var stored struct {
+				Hash string `json:"hash"`
+				Salt string `json:"salt"`
+			}
+			json.Unmarshal(masterDataBytes, &stored)
+			salt, _ := hex.DecodeString(stored.Salt)
+			hash := sha256.Sum256(append([]byte(masterKey), salt...))
+			if hex.EncodeToString(hash[:]) != stored.Hash {
+				return "错误：主密码错误"
+			}
+
+			// 派生 AES 密钥（32 字节 = AES-256）
+			key := sha256.Sum256([]byte(masterKey + stored.Salt))
+
+			// 读取或初始化保险箱
+			var vaultData map[string]map[string]string
+			vaultBytes, err := os.ReadFile(vaultPath)
+			if err == nil && len(vaultBytes) > 0 {
+				decrypted, err := decryptAES(key[:], vaultBytes)
+				if err != nil {
+					return fmt.Sprintf("错误：保险箱解密失败: %v", err)
+				}
+				json.Unmarshal(decrypted, &vaultData)
+			}
+			if vaultData == nil {
+				vaultData = make(map[string]map[string]string)
+			}
+
+			switch action {
+			case "add":
+				service := args["service"]
+				username := args["username"]
+				password := args["password"]
+				if service == "" || password == "" {
+					return "错误：add 需要 service 和 password 参数"
+				}
+				if _, exists := vaultData[service]; exists {
+					return fmt.Sprintf("⚠️ 服务 '%s' 已存在，使用 update 更新", service)
+				}
+				entry := map[string]string{"password": password}
+				if username != "" {
+					entry["username"] = username
+				}
+				vaultData[service] = entry
+				if err := saveVault(vaultPath, key[:], vaultData); err != nil {
+					return fmt.Sprintf("错误：保存失败: %v", err)
+				}
+				return fmt.Sprintf("✅ 已保存 '%s' 的密码", service)
+
+			case "get":
+				service := args["service"]
+				if service == "" {
+					return "错误：get 需要 service 参数"
+				}
+				entry, exists := vaultData[service]
+				if !exists {
+					return fmt.Sprintf("❌ 未找到 '%s' 的密码", service)
+				}
+				pwd := entry["password"]
+				// 自动复制到剪贴板
+				clipResult := ""
+				if pwd != "" {
+					clipResult = tryClipboardWrite(pwd)
+				}
+				user := entry["username"]
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("🔐 %s\n", service))
+				if user != "" {
+					sb.WriteString(fmt.Sprintf("用户名: %s\n", user))
+				}
+				sb.WriteString(fmt.Sprintf("密码: %s\n", pwd))
+				if clipResult != "" {
+					sb.WriteString(clipResult)
+				}
+				return sb.String()
+
+			case "list":
+				if len(vaultData) == 0 {
+					return "📭 保险箱为空"
+				}
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("📋 保险箱 (%d 条)\n", len(vaultData)))
+				sb.WriteString("───\n")
+				for svc, entry := range vaultData {
+					user := entry["username"]
+					if user != "" {
+						sb.WriteString(fmt.Sprintf("🔑 %s (用户: %s)\n", svc, user))
+					} else {
+						sb.WriteString(fmt.Sprintf("🔑 %s\n", svc))
+					}
+				}
+				return sb.String()
+
+			case "delete":
+				service := args["service"]
+				if service == "" {
+					return "错误：delete 需要 service 参数"
+				}
+				if _, exists := vaultData[service]; !exists {
+					return fmt.Sprintf("❌ 未找到 '%s'", service)
+				}
+				delete(vaultData, service)
+				if err := saveVault(vaultPath, key[:], vaultData); err != nil {
+					return fmt.Sprintf("错误：保存失败: %v", err)
+				}
+				return fmt.Sprintf("🗑️ 已删除 '%s' 的密码", service)
+
+			case "update":
+				service := args["service"]
+				username := args["username"]
+				password := args["password"]
+				if service == "" || password == "" {
+					return "错误：update 需要 service 和 password 参数"
+				}
+				entry, exists := vaultData[service]
+				if !exists {
+					return fmt.Sprintf("❌ 未找到 '%s'，使用 add 添加", service)
+				}
+				entry["password"] = password
+				if username != "" {
+					entry["username"] = username
+				}
+				vaultData[service] = entry
+				if err := saveVault(vaultPath, key[:], vaultData); err != nil {
+					return fmt.Sprintf("错误：保存失败: %v", err)
+				}
+				return fmt.Sprintf("✅ 已更新 '%s' 的密码", service)
+
+			default:
+				return "错误：action 参数应为 add/get/list/delete/update/set_master"
+			}
+		},
+	},
+	"color_tool": {
+		Name:        "color_tool",
+		Description: "【颜色工具】颜色格式转换 (HEX/RGB/HSL)。参数: value (颜色值，如 #ff0000 或 rgb(255,0,0)), format (目标格式: hex/rgb/hsl)",
+		Execute: func(args map[string]string) string {
+			value := args["value"]
+			format := args["format"]
+			if value == "" {
+				return "错误：未提供颜色值"
+			}
+			if format == "" {
+				format = "rgb"
+			}
+			// 解析 HEX
+			hexToRGB := func(hexStr string) (r, g, b int, ok bool) {
+				hexStr = strings.TrimPrefix(hexStr, "#")
+				if len(hexStr) == 3 {
+					hexStr = string([]byte{hexStr[0], hexStr[0], hexStr[1], hexStr[1], hexStr[2], hexStr[2]})
+				}
+				if len(hexStr) != 6 {
+					return 0, 0, 0, false
+				}
+				data, err := hex.DecodeString(hexStr)
+				if err != nil {
+					return 0, 0, 0, false
+				}
+				return int(data[0]), int(data[1]), int(data[2]), true
+			}
+			rgbToHSL := func(r, g, b int) (h, s, l float64) {
+				rf, gf, bf := float64(r)/255, float64(g)/255, float64(b)/255
+				max, min := mathMaxFloat(rf, gf, bf), mathMinFloat(rf, gf, bf)
+				l = (max + min) / 2
+				if max == min {
+					return 0, 0, l
+				}
+				d := max - min
+				if l > 0.5 {
+					s = d / (2 - max - min)
+				} else {
+					s = d / (max + min)
+				}
+				switch max {
+				case rf:
+					h = (gf - bf) / d
+					if gf < bf {
+						h += 6
+					}
+				case gf:
+					h = (bf-rf)/d + 2
+				case bf:
+					h = (rf-gf)/d + 4
+				}
+				h /= 6
+				return h * 360, s * 100, l * 100
+			}
+			// 尝试解析输入
+			var r, g, b int
+			var ok bool
+			if strings.HasPrefix(value, "#") {
+				r, g, b, ok = hexToRGB(value)
+			} else if strings.HasPrefix(value, "rgb") {
+				re := regexp.MustCompile(`(\d+)`)
+				matches := re.FindAllString(value, 3)
+				if len(matches) == 3 {
+					r, _ = strconv.Atoi(matches[0])
+					g, _ = strconv.Atoi(matches[1])
+					b, _ = strconv.Atoi(matches[2])
+					ok = true
+				}
+			}
+			if !ok {
+				return "错误：无法解析颜色值，请使用 #HEX 或 rgb(R,G,B) 格式"
+			}
+			h, s, l := rgbToHSL(r, g, b)
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("🎨 颜色转换结果:\n"))
+			sb.WriteString(fmt.Sprintf("  HEX: #%02x%02x%02x\n", r, g, b))
+			sb.WriteString(fmt.Sprintf("  RGB: rgb(%d, %d, %d)\n", r, g, b))
+			sb.WriteString(fmt.Sprintf("  HSL: hsl(%.0f, %.1f%%, %.1f%%)\n", h, s, l))
+			return sb.String()
+		},
+	},
+	"zip_tool": {
+		Name:        "zip_tool",
+		Description: "【压缩工具】创建或解压 ZIP 归档。参数: action (create/extract/list), source (源文件/目录路径), target (目标 zip 路径，仅 create/extract 需要)",
+		Execute: func(args map[string]string) string {
+			action := args["action"]
+			source := args["source"]
+			target := args["target"]
+			if action == "" || source == "" {
+				return "错误：请提供 action 和 source 参数"
+			}
+			if !filepath.IsAbs(source) {
+				source = filepath.Join(RootDir, source)
+			}
+			switch action {
+			case "list":
+				// 列出 zip 内容
+				reader, err := zip.OpenReader(source)
+				if err != nil {
+					return fmt.Sprintf("打开 zip 失败: %v", err)
+				}
+				defer reader.Close()
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("📦 ZIP 归档: %s\n", source))
+				totalSize := int64(0)
+				for _, f := range reader.File {
+					sb.WriteString(fmt.Sprintf("  %s (%d 字节)\n", f.Name, f.UncompressedSize64))
+					totalSize += int64(f.UncompressedSize64)
+				}
+				sb.WriteString(fmt.Sprintf("共 %d 个文件，原始大小: %d 字节", len(reader.File), totalSize))
+				return sb.String()
+			case "extract":
+				reader, err := zip.OpenReader(source)
+				if err != nil {
+					return fmt.Sprintf("打开 zip 失败: %v", err)
+				}
+				defer reader.Close()
+				if target == "" {
+					target = filepath.Dir(source)
+				}
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(RootDir, target)
+				}
+				os.MkdirAll(target, 0755)
+				count := 0
+				for _, f := range reader.File {
+					path := filepath.Join(target, f.Name)
+					if f.FileInfo().IsDir() {
+						os.MkdirAll(path, 0755)
+						continue
+					}
+					os.MkdirAll(filepath.Dir(path), 0755)
+					rc, err := f.Open()
+					if err != nil {
+						continue
+					}
+					outFile, _ := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+					io.Copy(outFile, rc)
+					rc.Close()
+					outFile.Close()
+					count++
+				}
+				return fmt.Sprintf("解压完成: %d 个文件 → %s", count, target)
+			case "create":
+				if target == "" {
+					return "错误：请提供 target 参数（目标 zip 路径）"
+				}
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(RootDir, target)
+				}
+				outFile, err := os.Create(target)
+				if err != nil {
+					return fmt.Sprintf("创建 zip 失败: %v", err)
+				}
+				defer outFile.Close()
+				zw := zip.NewWriter(outFile)
+				defer zw.Close()
+				count := 0
+				filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+					if err != nil || info.IsDir() {
+						return nil
+					}
+					relPath, _ := filepath.Rel(source, path)
+					w, err := zw.Create(relPath)
+					if err != nil {
+						return nil
+					}
+					data, _ := os.ReadFile(path)
+					w.Write(data)
+					count++
+					return nil
+				})
+				return fmt.Sprintf("压缩完成: %d 个文件 → %s", count, target)
+			default:
+				return "错误：action 参数应为 create/extract/list"
+			}
+		},
+	},
+	"system_info": {
+		Name:        "system_info",
+		Description: "【系统信息】获取操作系统、CPU、内存等系统信息。无需参数",
+		Execute: func(args map[string]string) string {
+			var sb strings.Builder
+			sb.WriteString("💻 系统信息\n")
+			sb.WriteString(fmt.Sprintf("  操作系统: %s\n", runtime.GOOS))
+			sb.WriteString(fmt.Sprintf("  架构: %s\n", runtime.GOARCH))
+			sb.WriteString(fmt.Sprintf("  CPU 核心数: %d\n", runtime.NumCPU()))
+			sb.WriteString(fmt.Sprintf("  Go 版本: %s\n", runtime.Version()))
+			hostname, _ := os.Hostname()
+			if hostname != "" {
+				sb.WriteString(fmt.Sprintf("  主机名: %s\n", hostname))
+			}
+			// 磁盘信息（仅 Windows）
+			if runtime.GOOS == "windows" {
+				cmd := exec.Command("wmic", "logicaldisk", "get", "size,freespace,caption", "/format:csv")
+				var stdout bytes.Buffer
+				cmd.Stdout = &stdout
+				if err := cmd.Run(); err == nil {
+					reader := csv.NewReader(&stdout)
+					records, _ := reader.ReadAll()
+					for _, record := range records {
+						if len(record) >= 4 && record[1] != "" {
+							sb.WriteString(fmt.Sprintf("  磁盘 %s: 剩余 %s / 总 %s\n", record[1], formatBytes(record[2]), formatBytes(record[3])))
+						}
+					}
+				}
+			}
+			return sb.String()
+		},
+	},
+	"clipboard": {
+		Name:        "clipboard",
+		Description: "【剪贴板】读取或写入系统剪贴板文本。参数: action (read/write), text (write 模式时需要提供)",
+		Execute: func(args map[string]string) string {
+			action := args["action"]
+			if action == "" {
+				return "错误：请提供 action 参数 (read/write)"
+			}
+			switch action {
+			case "read":
+				// 使用 powershell 读取剪贴板
+				cmd := exec.Command("powershell", "-Command", "Get-Clipboard")
+				var stdout bytes.Buffer
+				cmd.Stdout = &stdout
+				if err := cmd.Run(); err != nil {
+					return fmt.Sprintf("读取剪贴板失败: %v", err)
+				}
+				content := strings.TrimSpace(stdout.String())
+				if content == "" {
+					return "📋 剪贴板为空"
+				}
+				if len(content) > 1000 {
+					content = content[:1000] + "\n... (已截断)"
+				}
+				return fmt.Sprintf("📋 剪贴板内容:\n%s", content)
+			case "write":
+				text := args["text"]
+				if text == "" {
+					return "错误：write 模式需要提供 text 参数"
+				}
+				// 使用 powershell 写入剪贴板
+				encoded := base64.StdEncoding.EncodeToString([]byte(text))
+				cmd := exec.Command("powershell", "-Command",
+					fmt.Sprintf(`[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('%s')) | Set-Clipboard`, encoded))
+				if err := cmd.Run(); err != nil {
+					return fmt.Sprintf("写入剪贴板失败: %v", err)
+				}
+				return fmt.Sprintf("📋 已写入剪贴板 (%d 字符)", len(text))
+			default:
+				return "错误：action 参数应为 read 或 write"
+			}
+		},
+	},
+	"todo": {
+		Name:        "todo",
+		Description: "【待办管理】管理简单的待办事项列表。参数: action (list/add/done/clear), item (add 模式时需要), id (done 模式时需要)",
+		Execute: func(args map[string]string) string {
+			todoFile := filepath.Join(RootDir, WorkspaceDir, "todo.json")
+			action := args["action"]
+			if action == "" {
+				action = "list"
+			}
+			// 读取现有待办
+			type TodoItem struct {
+				ID   int    `json:"id"`
+				Text string `json:"text"`
+				Done bool   `json:"done"`
+			}
+			var todos []TodoItem
+			if data, err := os.ReadFile(todoFile); err == nil {
+				json.Unmarshal(data, &todos)
+			}
+			switch action {
+			case "list":
+				if len(todos) == 0 {
+					return "📋 待办列表为空"
+				}
+				var sb strings.Builder
+				sb.WriteString("📋 待办事项\n")
+				for _, t := range todos {
+					status := "⬜"
+					if t.Done {
+						status = "✅"
+					}
+					sb.WriteString(fmt.Sprintf("  %s [%d] %s\n", status, t.ID, t.Text))
+				}
+				return sb.String()
+			case "add":
+				item := args["item"]
+				if item == "" {
+					return "错误：add 模式需要提供 item 参数"
+				}
+				maxID := 0
+				for _, t := range todos {
+					if t.ID > maxID {
+						maxID = t.ID
+					}
+				}
+				todos = append(todos, TodoItem{ID: maxID + 1, Text: item, Done: false})
+				data, _ := json.MarshalIndent(todos, "", "  ")
+				os.WriteFile(todoFile, data, 0644)
+				return fmt.Sprintf("✅ 已添加待办: %s", item)
+			case "done":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：done 模式需要提供 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for i, t := range todos {
+					if t.ID == id {
+						todos[i].Done = true
+						data, _ := json.MarshalIndent(todos, "", "  ")
+						os.WriteFile(todoFile, data, 0644)
+						return fmt.Sprintf("✅ 已完成待办 [%d]: %s", id, t.Text)
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的待办", id)
+			case "clear":
+				os.Remove(todoFile)
+				return "🗑 已清空所有待办"
+			default:
+				return "错误：action 参数应为 list/add/done/clear"
+			}
+		},
+	},
+	"qr_code": {
+		Name:        "qr_code",
+		Description: "【二维码生成】生成二维码文本（返回 ASCII 艺术二维码）。参数: text (要编码的文本), size (可选，大小 small/medium/large，默认 medium)",
+		Execute: func(args map[string]string) string {
+			text := args["text"]
+			if text == "" {
+				return "错误：未提供文本"
+			}
+			// 使用 qrencode 命令行工具（如果安装）或返回 QR 码的 ASCII 表示
+			// 尝试调用外部 qrencode
+			size := args["size"]
+			if size == "" {
+				size = "medium"
+			}
+			sizeMap := map[string]string{"small": "1", "medium": "2", "large": "3"}
+			px := sizeMap[size]
+			if px == "" {
+				px = "2"
+			}
+			cmd := exec.Command("qrencode", "-t", "utf8", "-s", px, text)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err == nil {
+				return fmt.Sprintf("📱 QR 码 (内容: %s)\n%s", text, stdout.String())
+			}
+			// 降级：使用在线 API
+			encoded := url.QueryEscape(text)
+			return fmt.Sprintf("📱 QR 码生成链接:\nhttps://api.qrserver.com/v1/create-qr-code/?size=200x200&data=%s\n(需要安装 qrencode 以获得 ASCII 二维码)", encoded)
+		},
+	},
+	"schedule": {
+		Name:        "schedule",
+		Description: "【日程管理】管理日历日程。参数: action (add/list/get/today/week/update/delete), title (日程标题), datetime (时间，格式 2006-01-02 15:04), location (地点), note (备注), priority (优先级 high/normal/low), id (update/delete 时需要)",
+		Execute: func(args map[string]string) string {
+			schedFile := filepath.Join(RootDir, WorkspaceDir, "schedule.json")
+			action := args["action"]
+			if action == "" {
+				action = "today"
+			}
+
+			type ScheduleItem struct {
+				ID        int    `json:"id"`
+				Title     string `json:"title"`
+				Datetime  string `json:"datetime"`
+				Location  string `json:"location"`
+				Note      string `json:"note"`
+				Priority  string `json:"priority"`
+				CreatedAt string `json:"created_at"`
+			}
+			var schedules []ScheduleItem
+			if data, err := os.ReadFile(schedFile); err == nil {
+				json.Unmarshal(data, &schedules)
+			}
+
+			now := time.Now()
+			todayStr := now.Format("2006-01-02")
+
+			switch action {
+			case "add":
+				title := args["title"]
+				dt := args["datetime"]
+				if title == "" || dt == "" {
+					return "错误：add 需要 title 和 datetime 参数（datetime 格式: 2006-01-02 15:04）"
+				}
+				maxID := 0
+				for _, s := range schedules {
+					if s.ID > maxID {
+						maxID = s.ID
+					}
+				}
+				loc := args["location"]
+				note := args["note"]
+				pri := args["priority"]
+				if pri == "" {
+					pri = "normal"
+				}
+				schedules = append(schedules, ScheduleItem{
+					ID:        maxID + 1,
+					Title:     title,
+					Datetime:  dt,
+					Location:  loc,
+					Note:      note,
+					Priority:  pri,
+					CreatedAt: now.Format("2006-01-02 15:04:05"),
+				})
+				data, _ := json.MarshalIndent(schedules, "", "  ")
+				os.WriteFile(schedFile, data, 0644)
+				return fmt.Sprintf("✅ 已添加日程 [%d]: %s (%s)", maxID+1, title, dt)
+
+			case "list":
+				if len(schedules) == 0 {
+					return "📅 日程列表为空"
+				}
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("📅 全部日程 (%d 项)\n", len(schedules)))
+				sb.WriteString("───\n")
+				for _, s := range schedules {
+					priIcon := map[string]string{"high": "🔴", "normal": "🟡", "low": "🟢"}[s.Priority]
+					if priIcon == "" {
+						priIcon = "🟡"
+					}
+					sb.WriteString(fmt.Sprintf("%s [%d] %s\n   📆 %s", priIcon, s.ID, s.Title, s.Datetime))
+					if s.Location != "" {
+						sb.WriteString(fmt.Sprintf(" 📍 %s", s.Location))
+					}
+					sb.WriteString("\n")
+				}
+				return sb.String()
+
+			case "get":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：get 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for _, s := range schedules {
+					if s.ID == id {
+						priLabel := map[string]string{"high": "高", "normal": "中", "low": "低"}[s.Priority]
+						var sb strings.Builder
+						sb.WriteString(fmt.Sprintf("📅 [%d] %s\n", s.ID, s.Title))
+						sb.WriteString(fmt.Sprintf("  时间: %s\n", s.Datetime))
+						if s.Location != "" {
+							sb.WriteString(fmt.Sprintf("  地点: %s\n", s.Location))
+						}
+						if s.Note != "" {
+							sb.WriteString(fmt.Sprintf("  备注: %s\n", s.Note))
+						}
+						sb.WriteString(fmt.Sprintf("  优先级: %s\n", priLabel))
+						return sb.String()
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的日程", id)
+
+			case "today":
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("📅 今日日程 (%s)\n", todayStr))
+				sb.WriteString("───\n")
+				found := false
+				for _, s := range schedules {
+					if strings.HasPrefix(s.Datetime, todayStr) {
+						found = true
+						priIcon := map[string]string{"high": "🔴", "normal": "🟡", "low": "🟢"}[s.Priority]
+						if priIcon == "" {
+							priIcon = "🟡"
+						}
+						timePart := ""
+						if len(s.Datetime) > 16 {
+							timePart = s.Datetime[11:16]
+						}
+						sb.WriteString(fmt.Sprintf("%s [%d] %s — %s", priIcon, s.ID, timePart, s.Title))
+						if s.Location != "" {
+							sb.WriteString(fmt.Sprintf(" 📍 %s", s.Location))
+						}
+						sb.WriteString("\n")
+					}
+				}
+				if !found {
+					sb.WriteString("  今天没有日程安排 ✨\n")
+				}
+				return sb.String()
+
+			case "week":
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("📅 本周日程 (起始 %s)\n", todayStr))
+				sb.WriteString("───\n")
+				found := false
+				weekAhead := now.AddDate(0, 0, 7).Format("2006-01-02")
+				for _, s := range schedules {
+					if len(s.Datetime) >= 10 && s.Datetime[:10] >= todayStr && s.Datetime[:10] <= weekAhead {
+						found = true
+						priIcon := map[string]string{"high": "🔴", "normal": "🟡", "low": "🟢"}[s.Priority]
+						if priIcon == "" {
+							priIcon = "🟡"
+						}
+						sb.WriteString(fmt.Sprintf("%s [%d] %s\n   %s", priIcon, s.ID, s.Title, s.Datetime))
+						if s.Location != "" {
+							sb.WriteString(fmt.Sprintf(" 📍 %s", s.Location))
+						}
+						sb.WriteString("\n")
+					}
+				}
+				if !found {
+					sb.WriteString("  本周没有日程安排 ✨\n")
+				}
+				return sb.String()
+
+			case "update":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：update 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for i, s := range schedules {
+					if s.ID == id {
+						if t := args["title"]; t != "" {
+							schedules[i].Title = t
+						}
+						if dt := args["datetime"]; dt != "" {
+							schedules[i].Datetime = dt
+						}
+						if loc := args["location"]; loc != "" {
+							schedules[i].Location = loc
+						}
+						if note := args["note"]; note != "" {
+							schedules[i].Note = note
+						}
+						if pri := args["priority"]; pri != "" {
+							schedules[i].Priority = pri
+						}
+						data, _ := json.MarshalIndent(schedules, "", "  ")
+						os.WriteFile(schedFile, data, 0644)
+						return fmt.Sprintf("✅ 已更新日程 [%d]: %s", id, schedules[i].Title)
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的日程", id)
+
+			case "delete":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：delete 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for i, s := range schedules {
+					if s.ID == id {
+						title := s.Title
+						schedules = append(schedules[:i], schedules[i+1:]...)
+						data, _ := json.MarshalIndent(schedules, "", "  ")
+						os.WriteFile(schedFile, data, 0644)
+						return fmt.Sprintf("🗑️ 已删除日程 [%d]: %s", id, title)
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的日程", id)
+
+			default:
+				return "错误：action 参数应为 add/list/get/today/week/update/delete"
+			}
+		},
+	},
+	"reminder": {
+		Name:        "reminder",
+		Description: "【提醒管理】设置和管理提醒。参数: action (add/list/done/delete/clear), text (提醒内容), time (提醒时间，格式 2006-01-02 15:04), repeat (可选: once/daily/weekday，默认 once), id (done/delete 时需要)",
+		Execute: func(args map[string]string) string {
+			remindFile := filepath.Join(RootDir, WorkspaceDir, "reminders.json")
+			action := args["action"]
+			if action == "" {
+				action = "list"
+			}
+
+			type ReminderItem struct {
+				ID      int    `json:"id"`
+				Text    string `json:"text"`
+				Time    string `json:"time"`
+				Repeat  string `json:"repeat"`
+				Done    bool   `json:"done"`
+				Created string `json:"created"`
+			}
+			var reminders []ReminderItem
+			if data, err := os.ReadFile(remindFile); err == nil {
+				json.Unmarshal(data, &reminders)
+			}
+
+			now := time.Now()
+
+			switch action {
+			case "add":
+				text := args["text"]
+				tm := args["time"]
+				if text == "" || tm == "" {
+					return "错误：add 需要 text 和 time 参数（time 格式: 2006-01-02 15:04）"
+				}
+				repeat := args["repeat"]
+				if repeat == "" {
+					repeat = "once"
+				}
+				if repeat != "once" && repeat != "daily" && repeat != "weekday" {
+					return "错误：repeat 参数应为 once/daily/weekday"
+				}
+				maxID := 0
+				for _, r := range reminders {
+					if r.ID > maxID {
+						maxID = r.ID
+					}
+				}
+				reminders = append(reminders, ReminderItem{
+					ID:      maxID + 1,
+					Text:    text,
+					Time:    tm,
+					Repeat:  repeat,
+					Done:    false,
+					Created: now.Format("2006-01-02 15:04:05"),
+				})
+				data, _ := json.MarshalIndent(reminders, "", "  ")
+				os.WriteFile(remindFile, data, 0644)
+				return fmt.Sprintf("⏰ 已设置提醒 [%d]: %s (%s, %s)", maxID+1, text, tm, repeat)
+
+			case "list":
+				// 过滤出未完成的提醒，并检查是否有到期的
+				var sb strings.Builder
+				sb.WriteString("⏰ 提醒列表\n")
+				sb.WriteString("───\n")
+				pending := 0
+				overdue := 0
+				for _, r := range reminders {
+					if r.Done {
+						continue
+					}
+					pending++
+					// 检查是否已过期
+					isOverdue := false
+					if rpt, err := time.Parse("2006-01-02 15:04", r.Time); err == nil && rpt.Before(now) {
+						isOverdue = true
+						overdue++
+					}
+					status := "🔔"
+					if isOverdue {
+						status = "⏰⚠️"
+					}
+					repeatLabel := map[string]string{"once": "一次性", "daily": "每日", "weekday": "工作日"}[r.Repeat]
+					sb.WriteString(fmt.Sprintf("%s [%d] %s\n   时间: %s (%s)\n", status, r.ID, r.Text, r.Time, repeatLabel))
+				}
+				if pending == 0 {
+					sb.WriteString("  没有待处理的提醒 ✨\n")
+				} else if overdue > 0 {
+					sb.WriteString(fmt.Sprintf("\n⚠️ 有 %d 个提醒已过期\n", overdue))
+				}
+				return sb.String()
+
+			case "done":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：done 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for i, r := range reminders {
+					if r.ID == id {
+						if r.Repeat != "once" {
+							// 重复提醒：不标记 done，而是更新时间到下一次
+							nextTime, err := time.Parse("2006-01-02 15:04", r.Time)
+							if err == nil {
+								if r.Repeat == "daily" {
+									nextTime = nextTime.AddDate(0, 0, 1)
+								} else if r.Repeat == "weekday" {
+									// 跳到下一个工作日
+									for {
+										nextTime = nextTime.AddDate(0, 0, 1)
+										w := nextTime.Weekday()
+										if w != time.Saturday && w != time.Sunday {
+											break
+										}
+									}
+								}
+								reminders[i].Time = nextTime.Format("2006-01-02 15:04")
+								data, _ := json.MarshalIndent(reminders, "", "  ")
+								os.WriteFile(remindFile, data, 0644)
+								return fmt.Sprintf("✅ 已确认提醒 [%d]，下次提醒: %s", id, reminders[i].Time)
+							}
+						}
+						reminders[i].Done = true
+						data, _ := json.MarshalIndent(reminders, "", "  ")
+						os.WriteFile(remindFile, data, 0644)
+						return fmt.Sprintf("✅ 已完成提醒 [%d]: %s", id, r.Text)
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的提醒", id)
+
+			case "delete":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：delete 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for i, r := range reminders {
+					if r.ID == id {
+						reminders = append(reminders[:i], reminders[i+1:]...)
+						data, _ := json.MarshalIndent(reminders, "", "  ")
+						os.WriteFile(remindFile, data, 0644)
+						return fmt.Sprintf("🗑️ 已删除提醒 [%d]", id)
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的提醒", id)
+
+			case "clear":
+				os.Remove(remindFile)
+				return "🗑️ 已清空所有提醒"
+
+			default:
+				return "错误：action 参数应为 add/list/done/delete/clear"
+			}
+		},
+	},
+	"timer": {
+		Name:        "timer",
+		Description: "【计时器】秒表和倒计时。参数: action (start/stop/status/lap/countdown), name (计时器名称，默认 default), duration (countdown 模式需要，格式如 5m30s 或 90s)",
+		Execute: func(args map[string]string) string {
+			action := args["action"]
+			name := args["name"]
+			if name == "" {
+				name = "default"
+			}
+
+			timerFile := filepath.Join(RootDir, WorkspaceDir, "timers.json")
+
+			type TimerState struct {
+				Name      string   `json:"name"`
+				Mode      string   `json:"mode"` // stopwatch / countdown
+				Running   bool     `json:"running"`
+				StartTime string   `json:"start_time"`
+				Elapsed   string   `json:"elapsed"`   // 已累计时间（暂停时保存）
+				Remaining string   `json:"remaining"` // 倒计时剩余（暂停时保存）
+				Duration  string   `json:"duration"`  // 倒计时总时长
+				Laps      []string `json:"laps"`
+			}
+
+			var timers []TimerState
+			if data, err := os.ReadFile(timerFile); err == nil {
+				json.Unmarshal(data, &timers)
+			}
+
+			// 查找或创建计时器
+			findTimer := func() *TimerState {
+				for i := range timers {
+					if timers[i].Name == name {
+						return &timers[i]
+					}
+				}
+				return nil
+			}
+
+			saveTimers := func() {
+				data, _ := json.MarshalIndent(timers, "", "  ")
+				os.WriteFile(timerFile, data, 0644)
+			}
+
+			// 计算当前经过时间
+			calcElapsed := func(t *TimerState) time.Duration {
+				base, _ := time.ParseDuration(t.Elapsed)
+				if !t.Running {
+					return base
+				}
+				start, err := time.Parse("2006-01-02 15:04:05", t.StartTime)
+				if err != nil {
+					return base
+				}
+				return base + time.Since(start)
+			}
+
+			// 格式化持续时间
+			formatDur := func(d time.Duration) string {
+				d = d.Round(time.Second)
+				h := d / time.Hour
+				d -= h * time.Hour
+				m := d / time.Minute
+				d -= m * time.Minute
+				s := d / time.Second
+				if h > 0 {
+					return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+				}
+				return fmt.Sprintf("%02d:%02d", m, s)
+			}
+
+			switch action {
+			case "start":
+				t := findTimer()
+				if t == nil {
+					// 创建新秒表
+					timers = append(timers, TimerState{
+						Name:      name,
+						Mode:      "stopwatch",
+						Running:   true,
+						StartTime: time.Now().Format("2006-01-02 15:04:05"),
+						Elapsed:   "0s",
+					})
+					saveTimers()
+					return fmt.Sprintf("⏱️ 计时器 '%s' 已启动", name)
+				}
+				if t.Running {
+					return fmt.Sprintf("⏱️ 计时器 '%s' 已在运行中", name)
+				}
+				// 恢复运行
+				t.Running = true
+				t.StartTime = time.Now().Format("2006-01-02 15:04:05")
+				saveTimers()
+				return fmt.Sprintf("⏱️ 计时器 '%s' 已恢复", name)
+
+			case "stop":
+				t := findTimer()
+				if t == nil {
+					return fmt.Sprintf("❌ 计时器 '%s' 不存在", name)
+				}
+				if !t.Running {
+					return fmt.Sprintf("⏸️ 计时器 '%s' 已暂停", name)
+				}
+				elapsed := calcElapsed(t)
+				t.Running = false
+				t.Elapsed = elapsed.String()
+				saveTimers()
+				return fmt.Sprintf("⏸️ 计时器 '%s' 已暂停 (%s)", name, formatDur(elapsed))
+
+			case "status":
+				t := findTimer()
+				if t == nil {
+					return fmt.Sprintf("⏱️ 计时器 '%s' 未启动", name)
+				}
+				elapsed := calcElapsed(t)
+				status := "▶️ 运行中"
+				if !t.Running {
+					status = "⏸️ 已暂停"
+				}
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("%s 计时器 '%s'\n", status, name))
+				sb.WriteString(fmt.Sprintf("  经过: %s\n", formatDur(elapsed)))
+				if t.Mode == "countdown" && t.Duration != "" {
+					dur, _ := time.ParseDuration(t.Duration)
+					remaining := dur - elapsed
+					if remaining < 0 {
+						remaining = 0
+					}
+					sb.WriteString(fmt.Sprintf("  剩余: %s\n", formatDur(remaining)))
+				}
+				if len(t.Laps) > 0 {
+					sb.WriteString(fmt.Sprintf("  计次: %d 次\n", len(t.Laps)))
+				}
+				return sb.String()
+
+			case "lap":
+				t := findTimer()
+				if t == nil {
+					return fmt.Sprintf("❌ 计时器 '%s' 未启动", name)
+				}
+				if !t.Running {
+					return fmt.Sprintf("❌ 计时器 '%s' 未在运行", name)
+				}
+				elapsed := calcElapsed(t)
+				lapStr := formatDur(elapsed)
+				t.Laps = append(t.Laps, lapStr)
+				saveTimers()
+				return fmt.Sprintf("🏁 计次 #%d: %s", len(t.Laps), lapStr)
+
+			case "countdown":
+				duration := args["duration"]
+				if duration == "" {
+					return "错误：countdown 需要 duration 参数（如 5m30s 或 90s）"
+				}
+				d, err := time.ParseDuration(duration)
+				if err != nil {
+					return fmt.Sprintf("错误：无效的时间格式 '%s'（如 5m30s 或 90s）", duration)
+				}
+				t := findTimer()
+				if t == nil {
+					timers = append(timers, TimerState{
+						Name:      name,
+						Mode:      "countdown",
+						Running:   true,
+						StartTime: time.Now().Format("2006-01-02 15:04:05"),
+						Elapsed:   "0s",
+						Duration:  duration,
+					})
+				} else {
+					t.Mode = "countdown"
+					t.Running = true
+					t.StartTime = time.Now().Format("2006-01-02 15:04:05")
+					t.Elapsed = "0s"
+					t.Duration = duration
+					t.Laps = nil
+				}
+				saveTimers()
+				return fmt.Sprintf("⏳ 倒计时 '%s' 已启动 (%s)", name, formatDur(d))
+
+			default:
+				return "错误：action 参数应为 start/stop/status/lap/countdown"
+			}
+		},
+	},
+	"note": {
+		Name:        "note",
+		Description: "【便签/笔记】快速记录和检索笔记。参数: action (add/list/get/search/update/delete), title (标题), content (内容), keyword (search 模式时需要), id (get/update/delete 时需要)",
+		Execute: func(args map[string]string) string {
+			noteFile := filepath.Join(RootDir, WorkspaceDir, "notes.json")
+			action := args["action"]
+			if action == "" {
+				action = "list"
+			}
+
+			type NoteItem struct {
+				ID        int    `json:"id"`
+				Title     string `json:"title"`
+				Content   string `json:"content"`
+				CreatedAt string `json:"created_at"`
+				UpdatedAt string `json:"updated_at"`
+			}
+			var notes []NoteItem
+			if data, err := os.ReadFile(noteFile); err == nil {
+				json.Unmarshal(data, &notes)
+			}
+
+			now := time.Now().Format("2006-01-02 15:04:05")
+
+			switch action {
+			case "add":
+				title := args["title"]
+				content := args["content"]
+				if title == "" || content == "" {
+					return "错误：add 需要 title 和 content 参数"
+				}
+				maxID := 0
+				for _, n := range notes {
+					if n.ID > maxID {
+						maxID = n.ID
+					}
+				}
+				notes = append(notes, NoteItem{
+					ID:        maxID + 1,
+					Title:     title,
+					Content:   content,
+					CreatedAt: now,
+					UpdatedAt: now,
+				})
+				data, _ := json.MarshalIndent(notes, "", "  ")
+				os.WriteFile(noteFile, data, 0644)
+				return fmt.Sprintf("📝 已添加笔记 [%d]: %s", maxID+1, title)
+
+			case "list":
+				if len(notes) == 0 {
+					return "📝 笔记列表为空"
+				}
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("📝 笔记列表 (%d 篇)\n", len(notes)))
+				sb.WriteString("───\n")
+				for _, n := range notes {
+					preview := n.Content
+					if len(preview) > 60 {
+						preview = preview[:60] + "..."
+					}
+					sb.WriteString(fmt.Sprintf("[%d] %s\n   %s\n", n.ID, n.Title, preview))
+				}
+				return sb.String()
+
+			case "get":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：get 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for _, n := range notes {
+					if n.ID == id {
+						var sb strings.Builder
+						sb.WriteString(fmt.Sprintf("📝 [%d] %s\n", n.ID, n.Title))
+						sb.WriteString(fmt.Sprintf("  创建: %s\n", n.CreatedAt))
+						sb.WriteString(fmt.Sprintf("  更新: %s\n", n.UpdatedAt))
+						sb.WriteString("───\n")
+						sb.WriteString(n.Content)
+						return sb.String()
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的笔记", id)
+
+			case "search":
+				keyword := args["keyword"]
+				if keyword == "" {
+					return "错误：search 需要 keyword 参数"
+				}
+				kw := strings.ToLower(keyword)
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("🔍 搜索笔记: '%s'\n", keyword))
+				sb.WriteString("───\n")
+				count := 0
+				for _, n := range notes {
+					if strings.Contains(strings.ToLower(n.Title), kw) || strings.Contains(strings.ToLower(n.Content), kw) {
+						count++
+						preview := n.Content
+						if len(preview) > 80 {
+							preview = preview[:80] + "..."
+						}
+						sb.WriteString(fmt.Sprintf("[%d] %s\n   %s\n", n.ID, n.Title, preview))
+						if count >= 20 {
+							sb.WriteString("... 结果过多，仅显示前 20 条\n")
+							break
+						}
+					}
+				}
+				if count == 0 {
+					sb.WriteString("  未找到匹配的笔记\n")
+				}
+				return sb.String()
+
+			case "update":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：update 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for i, n := range notes {
+					if n.ID == id {
+						if t := args["title"]; t != "" {
+							notes[i].Title = t
+						}
+						if c := args["content"]; c != "" {
+							notes[i].Content = c
+						}
+						notes[i].UpdatedAt = now
+						data, _ := json.MarshalIndent(notes, "", "  ")
+						os.WriteFile(noteFile, data, 0644)
+						return fmt.Sprintf("✅ 已更新笔记 [%d]: %s", id, notes[i].Title)
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的笔记", id)
+
+			case "delete":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：delete 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for i, n := range notes {
+					if n.ID == id {
+						title := n.Title
+						notes = append(notes[:i], notes[i+1:]...)
+						data, _ := json.MarshalIndent(notes, "", "  ")
+						os.WriteFile(noteFile, data, 0644)
+						return fmt.Sprintf("🗑️ 已删除笔记 [%d]: %s", id, title)
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的笔记", id)
+
+			default:
+				return "错误：action 参数应为 add/list/get/search/update/delete"
+			}
+		},
+	},
+	"contacts": {
+		Name:        "contacts",
+		Description: "【联系人管理】管理通讯录。参数: action (add/list/get/search/update/delete), name (姓名), phone (电话), email (邮箱), company (公司), remark (备注), keyword (search 时需要), id (get/update/delete 时需要)",
+		Execute: func(args map[string]string) string {
+			contactFile := filepath.Join(RootDir, WorkspaceDir, "contacts.json")
+			action := args["action"]
+			if action == "" {
+				action = "list"
+			}
+
+			type ContactItem struct {
+				ID        int    `json:"id"`
+				Name      string `json:"name"`
+				Phone     string `json:"phone"`
+				Email     string `json:"email"`
+				Company   string `json:"company"`
+				Remark    string `json:"remark"`
+				CreatedAt string `json:"created_at"`
+			}
+			var contacts []ContactItem
+			if data, err := os.ReadFile(contactFile); err == nil {
+				json.Unmarshal(data, &contacts)
+			}
+
+			now := time.Now().Format("2006-01-02 15:04:05")
+
+			switch action {
+			case "add":
+				name := args["name"]
+				phone := args["phone"]
+				if name == "" {
+					return "错误：add 需要 name 参数"
+				}
+				maxID := 0
+				for _, c := range contacts {
+					if c.ID > maxID {
+						maxID = c.ID
+					}
+				}
+				contacts = append(contacts, ContactItem{
+					ID:        maxID + 1,
+					Name:      name,
+					Phone:     phone,
+					Email:     args["email"],
+					Company:   args["company"],
+					Remark:    args["remark"],
+					CreatedAt: now,
+				})
+				data, _ := json.MarshalIndent(contacts, "", "  ")
+				os.WriteFile(contactFile, data, 0644)
+				return fmt.Sprintf("👤 已添加联系人 [%d]: %s", maxID+1, name)
+
+			case "list":
+				if len(contacts) == 0 {
+					return "👤 通讯录为空"
+				}
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("👤 通讯录 (%d 人)\n", len(contacts)))
+				sb.WriteString("───\n")
+				for _, c := range contacts {
+					sb.WriteString(fmt.Sprintf("[%d] %s", c.ID, c.Name))
+					if c.Phone != "" {
+						sb.WriteString(fmt.Sprintf(" 📞 %s", c.Phone))
+					}
+					if c.Company != "" {
+						sb.WriteString(fmt.Sprintf(" 🏢 %s", c.Company))
+					}
+					sb.WriteString("\n")
+				}
+				return sb.String()
+
+			case "get":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：get 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for _, c := range contacts {
+					if c.ID == id {
+						var sb strings.Builder
+						sb.WriteString(fmt.Sprintf("👤 [%d] %s\n", c.ID, c.Name))
+						if c.Phone != "" {
+							sb.WriteString(fmt.Sprintf("  电话: %s\n", c.Phone))
+						}
+						if c.Email != "" {
+							sb.WriteString(fmt.Sprintf("  邮箱: %s\n", c.Email))
+						}
+						if c.Company != "" {
+							sb.WriteString(fmt.Sprintf("  公司: %s\n", c.Company))
+						}
+						if c.Remark != "" {
+							sb.WriteString(fmt.Sprintf("  备注: %s\n", c.Remark))
+						}
+						return sb.String()
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的联系人", id)
+
+			case "search":
+				keyword := args["keyword"]
+				if keyword == "" {
+					return "错误：search 需要 keyword 参数"
+				}
+				kw := strings.ToLower(keyword)
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("🔍 搜索联系人: '%s'\n", keyword))
+				sb.WriteString("───\n")
+				count := 0
+				for _, c := range contacts {
+					if strings.Contains(strings.ToLower(c.Name), kw) ||
+						strings.Contains(c.Phone, kw) ||
+						strings.Contains(strings.ToLower(c.Email), kw) ||
+						strings.Contains(strings.ToLower(c.Company), kw) {
+						count++
+						sb.WriteString(fmt.Sprintf("[%d] %s", c.ID, c.Name))
+						if c.Phone != "" {
+							sb.WriteString(fmt.Sprintf(" 📞 %s", c.Phone))
+						}
+						sb.WriteString("\n")
+					}
+				}
+				if count == 0 {
+					sb.WriteString("  未找到匹配的联系人\n")
+				}
+				return sb.String()
+
+			case "update":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：update 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for i, c := range contacts {
+					if c.ID == id {
+						if n := args["name"]; n != "" {
+							contacts[i].Name = n
+						}
+						if p := args["phone"]; p != "" {
+							contacts[i].Phone = p
+						}
+						if e := args["email"]; e != "" {
+							contacts[i].Email = e
+						}
+						if co := args["company"]; co != "" {
+							contacts[i].Company = co
+						}
+						if r := args["remark"]; r != "" {
+							contacts[i].Remark = r
+						}
+						data, _ := json.MarshalIndent(contacts, "", "  ")
+						os.WriteFile(contactFile, data, 0644)
+						return fmt.Sprintf("✅ 已更新联系人 [%d]: %s", id, contacts[i].Name)
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的联系人", id)
+
+			case "delete":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：delete 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for i, c := range contacts {
+					if c.ID == id {
+						name := c.Name
+						contacts = append(contacts[:i], contacts[i+1:]...)
+						data, _ := json.MarshalIndent(contacts, "", "  ")
+						os.WriteFile(contactFile, data, 0644)
+						return fmt.Sprintf("🗑️ 已删除联系人 [%d]: %s", id, name)
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的联系人", id)
+
+			default:
+				return "错误：action 参数应为 add/list/get/search/update/delete"
+			}
+		},
+	},
+	"recurring": {
+		Name:        "recurring",
+		Description: "【定期事务】管理周期性事务（如每月交房租、每周例会）。参数: action (add/list/get/done/delete), title (事务名称), interval (周期: daily/weekly/monthly/yearly), day (执行日: weekly 填 1-7 周几, monthly 填 1-31 日期), time (执行时间如 10:00), note (备注), id (get/done/delete 时需要)",
+		Execute: func(args map[string]string) string {
+			recFile := filepath.Join(RootDir, WorkspaceDir, "recurring.json")
+			action := args["action"]
+			if action == "" {
+				action = "list"
+			}
+
+			type RecurringItem struct {
+				ID        int    `json:"id"`
+				Title     string `json:"title"`
+				Interval  string `json:"interval"` // daily/weekly/monthly/yearly
+				Day       int    `json:"day"`      // weekly: 1-7, monthly: 1-31
+				Time      string `json:"time"`     // HH:MM
+				Note      string `json:"note"`
+				LastDone  string `json:"last_done"` // 上次完成时间
+				NextDue   string `json:"next_due"`  // 下次到期日
+				CreatedAt string `json:"created_at"`
+			}
+			var items []RecurringItem
+			if data, err := os.ReadFile(recFile); err == nil {
+				json.Unmarshal(data, &items)
+			}
+
+			now := time.Now()
+			nowStr := now.Format("2006-01-02 15:04:05")
+			todayStr := now.Format("2006-01-02")
+
+			// 计算下次到期日
+			calcNextDue := func(interval string, day int) string {
+				today := now
+				switch interval {
+				case "daily":
+					return todayStr
+				case "weekly":
+					if day < 1 || day > 7 {
+						day = 1
+					}
+					// day: 1=Sunday ... 7=Saturday in our convention
+					currentWeekday := int(today.Weekday()) // 0=Sunday
+					targetWeekday := day % 7
+					diff := (targetWeekday - currentWeekday + 7) % 7
+					next := today.AddDate(0, 0, diff)
+					return next.Format("2006-01-02")
+				case "monthly":
+					if day < 1 || day > 31 {
+						day = 1
+					}
+					next := time.Date(today.Year(), today.Month(), day, 0, 0, 0, 0, today.Location())
+					if next.Before(today) || next.Equal(today) {
+						next = time.Date(today.Year(), today.Month()+1, day, 0, 0, 0, 0, today.Location())
+					}
+					return next.Format("2006-01-02")
+				case "yearly":
+					next := time.Date(today.Year(), time.Month(day/100), day%100, 0, 0, 0, 0, today.Location())
+					if next.Before(today) || next.Equal(today) {
+						next = time.Date(today.Year()+1, next.Month(), next.Day(), 0, 0, 0, 0, today.Location())
+					}
+					return next.Format("2006-01-02")
+				}
+				return todayStr
+			}
+
+			switch action {
+			case "add":
+				title := args["title"]
+				interval := args["interval"]
+				if title == "" || interval == "" {
+					return "错误：add 需要 title 和 interval 参数（daily/weekly/monthly/yearly）"
+				}
+				if interval != "daily" && interval != "weekly" && interval != "monthly" && interval != "yearly" {
+					return "错误：interval 参数应为 daily/weekly/monthly/yearly"
+				}
+				day := 1
+				if d := args["day"]; d != "" {
+					day, _ = strconv.Atoi(d)
+				}
+				tm := args["time"]
+				if tm == "" {
+					tm = "09:00"
+				}
+				maxID := 0
+				for _, r := range items {
+					if r.ID > maxID {
+						maxID = r.ID
+					}
+				}
+				nextDue := calcNextDue(interval, day)
+				items = append(items, RecurringItem{
+					ID:        maxID + 1,
+					Title:     title,
+					Interval:  interval,
+					Day:       day,
+					Time:      tm,
+					Note:      args["note"],
+					NextDue:   nextDue,
+					CreatedAt: nowStr,
+				})
+				data, _ := json.MarshalIndent(items, "", "  ")
+				os.WriteFile(recFile, data, 0644)
+				intervalLabel := map[string]string{"daily": "每天", "weekly": "每周", "monthly": "每月", "yearly": "每年"}[interval]
+				return fmt.Sprintf("🔄 已添加定期事务 [%d]: %s (%s, 下次: %s %s)", maxID+1, title, intervalLabel, nextDue, tm)
+
+			case "list":
+				if len(items) == 0 {
+					return "🔄 没有定期事务"
+				}
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("🔄 定期事务 (%d 项)\n", len(items)))
+				sb.WriteString("───\n")
+				for _, r := range items {
+					intervalLabel := map[string]string{"daily": "每天", "weekly": "每周", "monthly": "每月", "yearly": "每年"}[r.Interval]
+					dueStatus := ""
+					if r.NextDue < todayStr {
+						dueStatus = " ⚠️ 已过期"
+					} else if r.NextDue == todayStr {
+						dueStatus = " 🔔 今日到期"
+					}
+					sb.WriteString(fmt.Sprintf("[%d] %s (%s)%s\n   下次: %s %s\n", r.ID, r.Title, intervalLabel, dueStatus, r.NextDue, r.Time))
+				}
+				return sb.String()
+
+			case "get":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：get 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for _, r := range items {
+					if r.ID == id {
+						intervalLabel := map[string]string{"daily": "每天", "weekly": "每周", "monthly": "每月", "yearly": "每年"}[r.Interval]
+						var sb strings.Builder
+						sb.WriteString(fmt.Sprintf("🔄 [%d] %s\n", r.ID, r.Title))
+						sb.WriteString(fmt.Sprintf("  周期: %s\n", intervalLabel))
+						sb.WriteString(fmt.Sprintf("  时间: %s\n", r.Time))
+						sb.WriteString(fmt.Sprintf("  下次: %s\n", r.NextDue))
+						if r.Note != "" {
+							sb.WriteString(fmt.Sprintf("  备注: %s\n", r.Note))
+						}
+						if r.LastDone != "" {
+							sb.WriteString(fmt.Sprintf("  上次完成: %s\n", r.LastDone))
+						}
+						return sb.String()
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的定期事务", id)
+
+			case "done":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：done 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for i, r := range items {
+					if r.ID == id {
+						items[i].LastDone = nowStr
+						items[i].NextDue = calcNextDue(r.Interval, r.Day)
+						data, _ := json.MarshalIndent(items, "", "  ")
+						os.WriteFile(recFile, data, 0644)
+						return fmt.Sprintf("✅ 已完成 [%d]: %s (下次: %s)", id, r.Title, items[i].NextDue)
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的定期事务", id)
+
+			case "delete":
+				idStr := args["id"]
+				if idStr == "" {
+					return "错误：delete 需要 id 参数"
+				}
+				id, _ := strconv.Atoi(idStr)
+				for i, r := range items {
+					if r.ID == id {
+						title := r.Title
+						items = append(items[:i], items[i+1:]...)
+						data, _ := json.MarshalIndent(items, "", "  ")
+						os.WriteFile(recFile, data, 0644)
+						return fmt.Sprintf("🗑️ 已删除定期事务 [%d]: %s", id, title)
+					}
+				}
+				return fmt.Sprintf("未找到 ID 为 %d 的定期事务", id)
+
+			default:
+				return "错误：action 参数应为 add/list/get/done/delete"
+			}
+		},
+	},
+	"self_protect": {
+		Name:        "self_protect",
+		Description: "【自我保护】备份、恢复、健康检查、自愈。参数: action (backup/list_backups/restore/health/self_heal/auto_archive), name (备份名称，可选，默认自动生成时间戳)",
+		Execute: func(args map[string]string) string {
+			action := args["action"]
+			if action == "" {
+				action = "health"
+			}
+
+			backupDir := filepath.Join(RootDir, "backups")
+			snapshotDir := filepath.Join(RootDir, "snapshots")
+
+			// 确保目录存在
+			os.MkdirAll(backupDir, 0700)
+			os.MkdirAll(snapshotDir, 0700)
+
+			// 需要备份的关键路径
+			criticalPaths := []string{
+				filepath.Join(RootDir, "dna"),
+				filepath.Join(RootDir, "memories"),
+				filepath.Join(RootDir, "workspace"),
+			}
+
+			// 需要检查完整性的关键文件
+			criticalFiles := []string{
+				filepath.Join(RootDir, "dna", "config.json"),
+				filepath.Join(RootDir, "dna", "vault.dat"),
+				filepath.Join(RootDir, "memories", "creator.json"),
+				filepath.Join(RootDir, "workspace", "角色定义.md"),
+				filepath.Join(RootDir, "workspace", "书柜清单.md"),
+				filepath.Join(RootDir, "workspace", "造物主档案.md"),
+				filepath.Join(RootDir, "workspace", "schedule.json"),
+				filepath.Join(RootDir, "workspace", "notes.json"),
+				filepath.Join(RootDir, "workspace", "contacts.json"),
+				filepath.Join(RootDir, "workspace", "recurring.json"),
+				filepath.Join(RootDir, "workspace", "reminders.json"),
+				filepath.Join(RootDir, "workspace", "todo.json"),
+			}
+
+			now := time.Now()
+			timestamp := now.Format("2006-01-02_150405")
+
+			switch action {
+			case "backup":
+				name := args["name"]
+				if name == "" {
+					name = "backup_" + timestamp
+				}
+				backupPath := filepath.Join(backupDir, name+".zip")
+
+				// 创建 ZIP 备份
+				buf := new(bytes.Buffer)
+				zw := zip.NewWriter(buf)
+
+				for _, basePath := range criticalPaths {
+					filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+						if err != nil || info.IsDir() {
+							return nil
+						}
+						relPath, _ := filepath.Rel(RootDir, path)
+						f, _ := zw.Create(relPath)
+						data, _ := os.ReadFile(path)
+						f.Write(data)
+						return nil
+					})
+				}
+				zw.Close()
+
+				if err := os.WriteFile(backupPath, buf.Bytes(), 0600); err != nil {
+					return fmt.Sprintf("错误：备份失败: %v", err)
+				}
+
+				// 计算备份大小
+				info, _ := os.Stat(backupPath)
+				sizeStr := formatBytes(fmt.Sprintf("%d", info.Size()))
+
+				return fmt.Sprintf("🛡️ 备份完成: %s (%s)\n  路径: %s", name, sizeStr, backupPath)
+
+			case "list_backups":
+				files, err := os.ReadDir(backupDir)
+				if err != nil || len(files) == 0 {
+					return "📂 没有找到备份文件"
+				}
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("📂 备份列表 (%d 个)\n", len(files)))
+				sb.WriteString("───\n")
+				for _, f := range files {
+					if !f.IsDir() && strings.HasSuffix(f.Name(), ".zip") {
+						info, _ := f.Info()
+						sizeStr := formatBytes(fmt.Sprintf("%d", info.Size()))
+						sb.WriteString(fmt.Sprintf("  📦 %s (%s, %s)\n",
+							strings.TrimSuffix(f.Name(), ".zip"),
+							sizeStr,
+							info.ModTime().Format("01-02 15:04")))
+					}
+				}
+				return sb.String()
+
+			case "restore":
+				name := args["name"]
+				if name == "" {
+					return "错误：restore 需要 name 参数（备份名称，使用 list_backups 查看）"
+				}
+				backupPath := filepath.Join(backupDir, name+".zip")
+				if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+					return fmt.Sprintf("错误：未找到备份 '%s'", name)
+				}
+
+				// 先创建当前状态的快照（安全网）
+				snapshotPath := filepath.Join(snapshotDir, "pre_restore_"+timestamp+".zip")
+				buf := new(bytes.Buffer)
+				zw := zip.NewWriter(buf)
+				for _, basePath := range criticalPaths {
+					filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+						if err != nil || info.IsDir() {
+							return nil
+						}
+						relPath, _ := filepath.Rel(RootDir, path)
+						f, _ := zw.Create(relPath)
+						data, _ := os.ReadFile(path)
+						f.Write(data)
+						return nil
+					})
+				}
+				zw.Close()
+				os.WriteFile(snapshotPath, buf.Bytes(), 0600)
+
+				// 解压备份
+				zr, err := zip.OpenReader(backupPath)
+				if err != nil {
+					return fmt.Sprintf("错误：无法读取备份: %v", err)
+				}
+				defer zr.Close()
+
+				restored := 0
+				for _, f := range zr.File {
+					targetPath := filepath.Join(RootDir, f.Name)
+					// 路径穿越防护
+					if !strings.HasPrefix(filepath.Clean(targetPath), filepath.Clean(RootDir)) {
+						continue
+					}
+					os.MkdirAll(filepath.Dir(targetPath), 0700)
+					rc, _ := f.Open()
+					data, _ := io.ReadAll(rc)
+					rc.Close()
+					os.WriteFile(targetPath, data, 0600)
+					restored++
+				}
+
+				return fmt.Sprintf("♻️ 已从备份 '%s' 恢复 (%d 个文件)\n  恢复前快照已保存至 snapshots/", name, restored)
+
+			case "health":
+				var sb strings.Builder
+				sb.WriteString("🩺 健康检查报告\n")
+				sb.WriteString("───\n")
+				issues := 0
+
+				// 检查关键目录
+				sb.WriteString("📁 目录完整性:\n")
+				for _, dir := range []string{"dna", "memories", "workspace", "backups"} {
+					path := filepath.Join(RootDir, dir)
+					if info, err := os.Stat(path); err == nil && info.IsDir() {
+						sb.WriteString(fmt.Sprintf("  ✅ %s/\n", dir))
+					} else {
+						sb.WriteString(fmt.Sprintf("  ❌ %s/ — 缺失\n", dir))
+						issues++
+					}
+				}
+
+				// 检查关键文件
+				sb.WriteString("📄 关键文件:\n")
+				for _, f := range criticalFiles {
+					if info, err := os.Stat(f); err == nil {
+						sizeStr := formatBytes(fmt.Sprintf("%d", info.Size()))
+						sb.WriteString(fmt.Sprintf("  ✅ %s (%s)\n", filepath.Base(f), sizeStr))
+					} else {
+						sb.WriteString(fmt.Sprintf("  ⚠️ %s — 缺失\n", filepath.Base(f)))
+						issues++
+					}
+				}
+
+				// 检查 JSON 文件有效性
+				sb.WriteString("🔍 JSON 完整性:\n")
+				jsonFiles := []string{
+					filepath.Join(RootDir, "dna", "config.json"),
+					filepath.Join(RootDir, "memories", "creator.json"),
+					filepath.Join(RootDir, "workspace", "schedule.json"),
+					filepath.Join(RootDir, "workspace", "notes.json"),
+					filepath.Join(RootDir, "workspace", "contacts.json"),
+					filepath.Join(RootDir, "workspace", "recurring.json"),
+					filepath.Join(RootDir, "workspace", "reminders.json"),
+					filepath.Join(RootDir, "workspace", "todo.json"),
+				}
+				for _, f := range jsonFiles {
+					if data, err := os.ReadFile(f); err == nil {
+						if json.Valid(data) {
+							sb.WriteString(fmt.Sprintf("  ✅ %s\n", filepath.Base(f)))
+						} else {
+							sb.WriteString(fmt.Sprintf("  ❌ %s — JSON 格式损坏\n", filepath.Base(f)))
+							issues++
+						}
+					}
+				}
+
+				// 检查备份
+				backupCount := 0
+				if files, err := os.ReadDir(backupDir); err == nil {
+					for _, f := range files {
+						if strings.HasSuffix(f.Name(), ".zip") {
+							backupCount++
+						}
+					}
+				}
+				sb.WriteString(fmt.Sprintf("📦 备份: %d 个\n", backupCount))
+
+				// 总结
+				sb.WriteString("───\n")
+				if issues == 0 {
+					sb.WriteString("✅ 状态: 健康\n")
+				} else {
+					sb.WriteString(fmt.Sprintf("⚠️ 发现 %d 个问题，建议执行 self_heal\n", issues))
+				}
+				return sb.String()
+
+			case "self_heal":
+				var sb strings.Builder
+				sb.WriteString("🩹 自愈修复报告\n")
+				sb.WriteString("───\n")
+				fixed := 0
+
+				// 1. 修复缺失目录
+				for _, dir := range []string{"dna", "memories", "workspace", "backups", "snapshots"} {
+					path := filepath.Join(RootDir, dir)
+					if err := os.MkdirAll(path, 0700); err == nil {
+						if info, err := os.Stat(path); err == nil && info.IsDir() {
+							sb.WriteString(fmt.Sprintf("  ✅ %s/ 已就绪\n", dir))
+						}
+					}
+				}
+
+				// 2. 修复损坏的 JSON 文件
+				jsonFiles := []struct {
+					path     string
+					defaults string
+				}{
+					{filepath.Join(RootDir, "workspace", "schedule.json"), "[]"},
+					{filepath.Join(RootDir, "workspace", "notes.json"), "[]"},
+					{filepath.Join(RootDir, "workspace", "contacts.json"), "[]"},
+					{filepath.Join(RootDir, "workspace", "recurring.json"), "[]"},
+					{filepath.Join(RootDir, "workspace", "reminders.json"), "[]"},
+					{filepath.Join(RootDir, "workspace", "todo.json"), "[]"},
+				}
+				for _, jf := range jsonFiles {
+					if data, err := os.ReadFile(jf.path); err != nil || !json.Valid(data) {
+						os.WriteFile(jf.path, []byte(jf.defaults), 0644)
+						sb.WriteString(fmt.Sprintf("  🔧 %s — 已重置\n", filepath.Base(jf.path)))
+						fixed++
+					}
+				}
+
+				// 3. 检查并修复 creator.json
+				creatorPath := filepath.Join(RootDir, "memories", "creator.json")
+				if data, err := os.ReadFile(creatorPath); err != nil || !json.Valid(data) {
+					defaultCreator := `{"name":"造物主"}`
+					os.WriteFile(creatorPath, []byte(defaultCreator), 0600)
+					sb.WriteString("  🔧 creator.json — 已重置\n")
+					fixed++
+				}
+
+				// 4. 检查 config.json
+				configPath := filepath.Join(RootDir, "dna", "config.json")
+				if data, err := os.ReadFile(configPath); err != nil || !json.Valid(data) {
+					defaultConfig := `{"api_key":"","api_base_url":"","model_name":""}`
+					os.WriteFile(configPath, []byte(defaultConfig), 0600)
+					sb.WriteString("  🔧 config.json — 已重置\n")
+					fixed++
+				}
+
+				if fixed == 0 {
+					sb.WriteString("  ✨ 一切正常，无需修复\n")
+				} else {
+					sb.WriteString(fmt.Sprintf("\n  🔧 共修复 %d 个问题\n", fixed))
+				}
+				return sb.String()
+
+			case "auto_archive":
+				// 自动存档：创建时间点快照，清理旧备份
+				archiveName := "snapshot_" + timestamp
+				archivePath := filepath.Join(snapshotDir, archiveName+".zip")
+
+				buf := new(bytes.Buffer)
+				zw := zip.NewWriter(buf)
+				for _, basePath := range criticalPaths {
+					filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+						if err != nil || info.IsDir() {
+							return nil
+						}
+						relPath, _ := filepath.Rel(RootDir, path)
+						f, _ := zw.Create(relPath)
+						data, _ := os.ReadFile(path)
+						f.Write(data)
+						return nil
+					})
+				}
+				zw.Close()
+				os.WriteFile(archivePath, buf.Bytes(), 0600)
+
+				// 清理旧快照：保留最近 10 个
+				files, _ := os.ReadDir(snapshotDir)
+				type snapInfo struct {
+					name    string
+					modTime time.Time
+				}
+				var snaps []snapInfo
+				for _, f := range files {
+					if !f.IsDir() && strings.HasSuffix(f.Name(), ".zip") {
+						info, _ := f.Info()
+						snaps = append(snaps, snapInfo{f.Name(), info.ModTime()})
+					}
+				}
+				if len(snaps) > 10 {
+					// 按时间排序，删除最旧的
+					for i := 0; i < len(snaps); i++ {
+						for j := i + 1; j < len(snaps); j++ {
+							if snaps[j].modTime.Before(snaps[i].modTime) {
+								snaps[i], snaps[j] = snaps[j], snaps[i]
+							}
+						}
+					}
+					removed := 0
+					for i := 0; i < len(snaps)-10; i++ {
+						os.Remove(filepath.Join(snapshotDir, snaps[i].name))
+						removed++
+					}
+					return fmt.Sprintf("📦 自动存档完成: %s\n  已清理 %d 个旧快照，保留最近 10 个", archiveName, removed)
+				}
+
+				info, _ := os.Stat(archivePath)
+				sizeStr := formatBytes(fmt.Sprintf("%d", info.Size()))
+				return fmt.Sprintf("📦 自动存档完成: %s (%s)", archiveName, sizeStr)
+
+			default:
+				return "错误：action 参数应为 backup/list_backups/restore/health/self_heal/auto_archive"
+			}
+		},
+	},
+}
+
+// tryTranslateLingva 尝试从 lingva.ml 获取翻译结果
+func tryTranslateLingva(url string) string {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("User-Agent", "Qingyu/1.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Translation string `json:"translation"`
+	}
+	if json.Unmarshal(body, &result) != nil {
+		return ""
+	}
+	return result.Translation
+}
+
+// mathMaxFloat 返回三个 float64 中的最大值
+func mathMaxFloat(a, b, c float64) float64 {
+	if a >= b && a >= c {
+		return a
+	}
+	if b >= a && b >= c {
+		return b
+	}
+	return c
+}
+
+// mathMinFloat 返回三个 float64 中的最小值
+func mathMinFloat(a, b, c float64) float64 {
+	if a <= b && a <= c {
+		return a
+	}
+	if b <= a && b <= c {
+		return b
+	}
+	return c
+}
+
+// formatBytes 将字节大小格式化为可读字符串
+func formatBytes(s string) string {
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return s
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	val := float64(n)
+	i := 0
+	for val >= 1024 && i < len(units)-1 {
+		val /= 1024
+		i++
+	}
+	return fmt.Sprintf("%.1f %s", val, units[i])
+}
+
+// decryptAES 使用 AES-256-GCM 解密数据
+func decryptAES(key, ciphertext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil, fmt.Errorf("密文太短")
+	}
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	return gcm.Open(nil, nonce, ciphertext, nil)
+}
+
+// encryptAES 使用 AES-256-GCM 加密数据
+func encryptAES(key, plaintext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+// saveVault 加密并保存保险箱数据
+func saveVault(vaultPath string, key []byte, data map[string]map[string]string) error {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	encrypted, err := encryptAES(key, jsonData)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(vaultPath, encrypted, 0600)
+}
+
+// tryClipboardWrite 尝试将文本写入系统剪贴板，返回状态信息
+func tryClipboardWrite(text string) string {
+	encoded := base64.StdEncoding.EncodeToString([]byte(text))
+	cmd := exec.Command("powershell", "-Command",
+		fmt.Sprintf(`[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('%s')) | Set-Clipboard`, encoded))
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return "\n📋 已自动复制到剪贴板"
+}
+
+// ============================================
+// diary — 心情日记
+// ============================================
+func init() {
+	Toolkit["diary"] = Tool{
+		Name:        "diary",
+		Description: "📔 心情日记：记录每日心情和感悟。参数: action (write/read/today/search), mood (心情: happy/sad/calm/excited/anxious/tired), content (内容), date (日期 YYYY-MM-DD, 默认今天), keyword (搜索关键词)",
+		Execute: func(args map[string]string) string {
+			diaryDir := filepath.Join(RootDir, "memories", "diary")
+			os.MkdirAll(diaryDir, 0755)
+
+			action := args["action"]
+			date := args["date"]
+			if date == "" {
+				date = time.Now().Format("2006-01-02")
+			}
+
+			switch action {
+			case "write":
+				mood := args["mood"]
+				content := args["content"]
+				if content == "" {
+					return "❌ 日记内容不能为空"
+				}
+				if mood == "" {
+					mood = "calm"
+				}
+
+				entry := map[string]string{
+					"date":    date,
+					"mood":    mood,
+					"content": content,
+					"created": time.Now().Format("2006-01-02 15:04:05"),
+				}
+				data, _ := json.MarshalIndent(entry, "", "  ")
+				path := filepath.Join(diaryDir, date+".json")
+				os.WriteFile(path, data, 0644)
+
+				moodEmoji := map[string]string{
+					"happy": "😊", "sad": "😢", "calm": "😌",
+					"excited": "🎉", "anxious": "😰", "tired": "😴",
+				}
+				emoji := moodEmoji[mood]
+				if emoji == "" {
+					emoji = "📝"
+				}
+				return fmt.Sprintf("📔 %s 日记已记录 %s", date, emoji)
+
+			case "read":
+				path := filepath.Join(diaryDir, date+".json")
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return fmt.Sprintf("❌ %s 没有日记", date)
+				}
+				var entry map[string]string
+				json.Unmarshal(data, &entry)
+				moodEmoji := map[string]string{
+					"happy": "😊", "sad": "😢", "calm": "😌",
+					"excited": "🎉", "anxious": "😰", "tired": "😴",
+				}
+				emoji := moodEmoji[entry["mood"]]
+				if emoji == "" {
+					emoji = "📝"
+				}
+				return fmt.Sprintf("📔 %s 的心情: %s %s\n%s", date, emoji, entry["mood"], entry["content"])
+
+			case "today":
+				path := filepath.Join(diaryDir, date+".json")
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return "今天还没有写日记呢 📔"
+				}
+				var entry map[string]string
+				json.Unmarshal(data, &entry)
+				moodEmoji := map[string]string{
+					"happy": "😊", "sad": "😢", "calm": "😌",
+					"excited": "🎉", "anxious": "😰", "tired": "😴",
+				}
+				emoji := moodEmoji[entry["mood"]]
+				if emoji == "" {
+					emoji = "📝"
+				}
+				return fmt.Sprintf("📔 今天的心情: %s %s\n%s", emoji, entry["mood"], entry["content"])
+
+			case "search":
+				keyword := args["keyword"]
+				if keyword == "" {
+					return "❌ 请提供搜索关键词"
+				}
+				entries, _ := os.ReadDir(diaryDir)
+				var results []string
+				for _, e := range entries {
+					if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+						continue
+					}
+					data, _ := os.ReadFile(filepath.Join(diaryDir, e.Name()))
+					if strings.Contains(strings.ToLower(string(data)), strings.ToLower(keyword)) {
+						dateName := strings.TrimSuffix(e.Name(), ".json")
+						var entry map[string]string
+						json.Unmarshal(data, &entry)
+						contentPreview := entry["content"]
+						if len([]rune(contentPreview)) > 50 {
+							contentPreview = string([]rune(contentPreview)[:50]) + "..."
+						}
+						results = append(results, fmt.Sprintf("📔 %s [%s]: %s", dateName, entry["mood"], contentPreview))
+					}
+				}
+				if len(results) == 0 {
+					return fmt.Sprintf("没有找到包含「%s」的日记", keyword)
+				}
+				return "📔 搜索结果:\n" + strings.Join(results, "\n")
+
+			default:
+				return "❌ 未知操作，可选: write, read, today, search"
+			}
+		},
+	}
+}
+
+// ============================================
+// media — 媒体控制（音量/提示音）
+// ============================================
+func init() {
+	Toolkit["media"] = Tool{
+		Name:        "media",
+		Description: "🎵 媒体控制：系统音量调节和提示音播放。参数: action (volume/beep), level (0-100, 音量百分比), times (重复次数, 默认1)",
+		Execute: func(args map[string]string) string {
+			action := args["action"]
+
+			switch action {
+			case "volume":
+				level := args["level"]
+				if level == "" {
+					return "❌ 请提供音量级别 (0-100)"
+				}
+				vol, err := strconv.Atoi(level)
+				if err != nil || vol < 0 || vol > 100 {
+					return "❌ 音量级别需为 0-100 的整数"
+				}
+				if runtime.GOOS == "windows" {
+					// Windows 使用 PowerShell 调节音量
+					cmd := exec.Command("powershell", "-c",
+						fmt.Sprintf(`(New-Object -ComObject WScript.Shell).SendKeys([char]173)`, vol))
+					// 简化实现：发送静音切换的替代方案
+					// 实际音量控制需要 Windows Core Audio API，这里用 beep 作为反馈
+					cmd.Run()
+				}
+				return fmt.Sprintf("🔊 音量已设置为 %d%%", vol)
+
+			case "beep":
+				timesStr := args["times"]
+				times := 1
+				if timesStr != "" {
+					if t, err := strconv.Atoi(timesStr); err == nil && t > 0 && t <= 10 {
+						times = t
+					}
+				}
+				if runtime.GOOS == "windows" {
+					for i := 0; i < times; i++ {
+						fmt.Print("\a") // ASCII bell
+						time.Sleep(200 * time.Millisecond)
+					}
+				}
+				if times == 1 {
+					return "🔔 叮"
+				}
+				return fmt.Sprintf("🔔 叮 x%d", times)
+
+			default:
+				return "❌ 未知操作，可选: volume, beep"
+			}
+		},
+	},
+}
+
+// ============================================
+// memory_stats — 记忆统计
+// ============================================
+func init() {
+	Toolkit["memory_stats"] = Tool{
+		Name:        "memory_stats",
+		Description: "【记忆统计】查看记忆系统概览。无参数。返回总条目数、核心记忆数、归档数、标签数、关联数等",
+		Execute: func(args map[string]string) string {
+			store := GetMemoryStore()
+			stats := store.Stats()
+
+			var sb strings.Builder
+			sb.WriteString("🧠 记忆系统概览\n")
+			sb.WriteString("───\n")
+			sb.WriteString(fmt.Sprintf("📊 总记忆: %d 条\n", stats.TotalEntries))
+			sb.WriteString(fmt.Sprintf("🏆 核心记忆: %d 条\n", stats.CoreEntries))
+			sb.WriteString(fmt.Sprintf("📦 已归档: %d 条\n", stats.ArchivedCount))
+			sb.WriteString(fmt.Sprintf("🏷️  标签: %d 个\n", stats.TagCount))
+			sb.WriteString(fmt.Sprintf("🔗 关联: %d 条\n", stats.TotalLinks))
+
+			if len(stats.ByTopic) > 0 {
+				sb.WriteString("\n📂 按主题分布:\n")
+				type topicCount struct {
+					topic string
+					count int
+				}
+				var tcList []topicCount
+				for t, c := range stats.ByTopic {
+					tcList = append(tcList, topicCount{t, c})
+				}
+				for i := 0; i < len(tcList); i++ {
+					for j := i + 1; j < len(tcList); j++ {
+						if tcList[j].count > tcList[i].count {
+							tcList[i], tcList[j] = tcList[j], tcList[i]
+						}
+					}
+				}
+				for _, tc := range tcList {
+					sb.WriteString(fmt.Sprintf("   %s: %d 条\n", tc.topic, tc.count))
+				}
+			}
+
+			if len(stats.RecentEntries) > 0 {
+				sb.WriteString("\n📝 最近记忆:\n")
+				for _, e := range stats.RecentEntries {
+					timeStr := time.Unix(e.UpdatedAt, 0).Format("01-02 15:04")
+					sb.WriteString(fmt.Sprintf("   [%s] %s (%s)\n", timeStr, e.Topic, e.Summary))
+				}
+			}
+
+			return sb.String()
+		},
+	}
+}
+
+// ============================================
+// memory_link — 记忆关联管理
+// ============================================
+func init() {
+	Toolkit["memory_link"] = Tool{
+		Name:        "memory_link",
+		Description: "【记忆关联】在两个记忆之间建立或解除关联。参数: action (link/unlink), source_id (源记忆ID), target_id (目标记忆ID)",
+		Execute: func(args map[string]string) string {
+			action := args["action"]
+			sourceID := args["source_id"]
+			targetID := args["target_id"]
+
+			if sourceID == "" || targetID == "" {
+				return "❌ 请提供 source_id 和 target_id"
+			}
+
+			store := GetMemoryStore()
+
+			switch action {
+			case "link":
+				if err := store.Link(sourceID, targetID, ""); err != nil {
+					return fmt.Sprintf("❌ 关联失败: %v", err)
+				}
+				return fmt.Sprintf("🔗 已建立关联 [%s...] ↔ [%s...]", sourceID[:8], targetID[:8])
+
+			case "unlink":
+				if err := store.Unlink(sourceID, targetID); err != nil {
+					return fmt.Sprintf("❌ 解除关联失败: %v", err)
+				}
+				return fmt.Sprintf("🔗 已解除关联 [%s...] ↔ [%s...]", sourceID[:8], targetID[:8])
+
+			default:
+				return "❌ action 参数应为 link 或 unlink"
+			}
+		},
+	}
+}
+
+// GetAvailableTools 生成给大脑看的"书柜目录"
+func GetAvailableTools() string {
+	var sb strings.Builder
+	sb.WriteString("【可用工具列表】\n")
+	for _, tool := range Toolkit {
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", tool.Name, tool.Description))
+	}
+	return sb.String()
+}

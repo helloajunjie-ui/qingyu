@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>青羽</title>
+    <link rel="stylesheet" href="./src/style.css"/>
+</head>
+<body>
+    <div id="app">
+        <!-- 首次运行设置面板 -->
+        <div id="setup-panel" class="panel hidden">
+            <div class="panel-header">
+                <span class="panel-title">初次见面</span>
+            </div>
+            <div class="panel-body">
+                <p class="setup-desc">我是青羽，一个具备真实行动力的本地智能体。<br/>请告诉我你的名字。</p>
+                <div class="input-group">
+                    <input id="setup-name" type="text" placeholder="你的名字..." autocomplete="off"/>
+                    <button id="setup-btn" class="btn-primary">锚定</button>
+                </div>
+                <p id="setup-error" class="error-msg hidden"></p>
+            </div>
+        </div>
+
+        <!-- API 配置面板（中转站 + Key + 模型选择） -->
+        <div id="apikey-panel" class="panel hidden">
+            <div class="panel-header">
+                <span class="panel-title">API 配置</span>
+            </div>
+            <div class="panel-body">
+                <p class="setup-desc">配置 AI 中转站接入。</p>
+                <div class="input-group" style="margin-bottom:8px;">
+                    <input id="api-url-input" type="text" placeholder="中转站地址 (如 https://api.xxx.com/v1/chat/completions)" autocomplete="off" style="font-size:11px;"/>
+                </div>
+                <div class="input-group" style="margin-bottom:8px;">
+                    <input id="apikey-input" type="password" placeholder="API Key (sk-...)" autocomplete="off"/>
+                </div>
+                <div class="input-group" style="margin-bottom:8px;flex-wrap:wrap;">
+                    <select id="model-select" style="flex:1;min-width:0;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:12px;outline:none;">
+                        <option value="">加载模型中...</option>
+                    </select>
+                    <button id="fetch-models-btn" class="btn-secondary" style="white-space:nowrap;padding:8px 10px;font-size:11px;">获取模型</button>
+                </div>
+                <div class="input-group">
+                    <button id="apikey-btn" class="btn-primary" style="flex:1;">保存配置</button>
+                </div>
+                <p id="apikey-error" class="error-msg hidden"></p>
+            </div>
+        </div>
+
+        <!-- 主界面：Widget 模式 -->
+        <div id="widget" class="widget">
+            <div class="widget-glow" id="widget-glow"></div>
+            <div class="widget-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                    <path d="M2 17l10 5 10-5"/>
+                    <path d="M2 12l10 5 10-5"/>
+                </svg>
+            </div>
+            <div class="widget-status" id="widget-status"></div>
+        </div>
+
+        <!-- 主界面：对话面板 -->
+        <div id="console" class="console hidden">
+            <div class="console-header">
+                <div class="console-title">
+                    <span class="console-dot" id="console-dot"></span>
+                    <span id="console-name">青羽</span>
+                </div>
+                <div class="console-actions">
+                    <button id="btn-minimize" class="btn-icon" title="最小化">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                    </button>
+                    <button id="btn-close" class="btn-icon" title="关闭">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"/>
+                            <line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="console-body" id="console-body">
+                <div class="message welcome" id="welcome-msg">
+                    <div class="msg-avatar">青</div>
+                    <div class="msg-content">
+                        <p id="welcome-text">连接中...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="console-footer">
+                <div class="input-row">
+                    <input id="chat-input" type="text" placeholder="输入消息..." autocomplete="off"/>
+                    <button id="chat-send" class="btn-send" disabled>
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"/>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="./src/main.js" type="module"></script>
+</body>
+</html>
