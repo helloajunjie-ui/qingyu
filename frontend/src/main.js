@@ -465,7 +465,12 @@ async function sendMessage() {
     }
   } catch (err) {
     removeTyping();
-    addMessage(`连接错误：${err.message || '未知错误'}`, 'bot');
+    const msg = err.message || '';
+    if (msg.includes('脑连接断开') || msg.includes('HTTP')) {
+      addMessage('😅 我好像连不上大脑了，检查一下设置里的中转站地址？', 'bot');
+    } else {
+      addMessage(`😅 出了点小问题：${msg}`, 'bot');
+    }
   } finally {
     isProcessing = false;
     setThinking(false);

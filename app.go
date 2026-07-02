@@ -1187,9 +1187,21 @@ func (a *App) syncWithBrain(visionContext, prompt string) string {
 		}
 		logAudit("llm_request", "chat", fmt.Sprintf("失败 %s (%v)", statusStr, elapsed))
 		if resp != nil {
-			return fmt.Sprintf("脑连接断开 (HTTP %d)", resp.StatusCode)
+			// 根据状态码给出友好的错误提示
+			switch resp.StatusCode {
+			case 401, 403:
+				return "😅 认证失败，请检查 API Key 是否正确"
+			case 404:
+				return "🤔 找不到对话接口，请检查中转站地址是否正确（需要以 /chat/completions 结尾）"
+			case 429:
+				return "⏳ 请求太频繁了，让我稍等一下再试"
+			case 502, 503:
+				return "🔧 中转站暂时不可用，可能是维护中，稍后再试试吧"
+			default:
+				return fmt.Sprintf("😅 连接中转站出错了（HTTP %d），请检查地址和网络", resp.StatusCode)
+			}
 		}
-		return fmt.Sprintf("脑连接断开: %v", err)
+		return fmt.Sprintf("😅 连不上中转站了：%v", err)
 	}
 	defer resp.Body.Close()
 
@@ -1204,7 +1216,7 @@ func (a *App) syncWithBrain(visionContext, prompt string) string {
 
 	if len(result.Choices) == 0 {
 		logAudit("llm_request", "chat", "空响应")
-		return "大脑无响应：模型返回空结果"
+		return "🤔 模型返回了空结果，可能是模型不支持对话，换个模型试试？"
 	}
 
 	// 记录 LLM 请求成功（只记录响应长度，不记录内容）
@@ -1217,10 +1229,10 @@ func (a *App) syncWithBrain(visionContext, prompt string) string {
 // FetchModels 从中转站 API 获取可用模型列表
 func (a *App) FetchModels() string {
 	if a.apiKey == "" {
-		return "请先配置 API Key"
+		return "请先在设置中填写 API Key"
 	}
 	if a.apiBaseURL == "" {
-		return "请先配置中转站地址"
+		return "请先在设置中填写中转站地址"
 	}
 
 	// 从 baseURL 推导 models 端点
@@ -1239,14 +1251,14 @@ func (a *App) FetchModels() string {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Sprintf("获取模型列表失败: %v\n请检查中转站地址是否正确", err)
+		return fmt.Sprintf("😅 连不上中转站：%v\n请检查地址是否正确", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
-		return fmt.Sprintf("获取模型列表失败 (HTTP %d)\n响应: %s", resp.StatusCode, string(body))
+		return fmt.Sprintf("😅 获取模型列表失败（HTTP %d），请检查中转站地址是否正确", resp.StatusCode)
 	}
 
 	// 尝试解析 OpenAI-compatible 标准格式: { "data": [{ "id": "...", "object": "..." }] }
@@ -1310,7 +1322,7 @@ func (a *App) FetchModels() string {
 		return string(result)
 	}
 
-	return fmt.Sprintf("无法解析模型列表，响应内容:\n%s", string(body))
+	return fmt.Sprintf("🤔 中转站返回了无法识别的格式，请检查地址是否正确\n原始响应：%s", string(body))
 }
 
 // GetConfig 返回当前配置（供前端读取）
@@ -1426,7 +1438,7 @@ func (a *App) processAgentLoop(visionContext, userInput string) string {
 	for iteration := 0; iteration < maxIterations; iteration++ {
 		response := a.syncWithBrain(visionContext, currentInput)
 		if response == "" {
-			return "大脑无响应"
+			return "😴 我好像走神了，能再说一遍吗？"
 		}
 
 		// 使用括号计数法提取工具调用 JSON（支持嵌套对象）
