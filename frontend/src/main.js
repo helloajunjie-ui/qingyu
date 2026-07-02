@@ -25,6 +25,7 @@ const el = {
   fetchModelsBtn:$('#fetch-models-btn'),
   apikeyBtn:     $('#apikey-btn'),
   apikeyError:   $('#apikey-error'),
+  btnSettings:   $('#btn-settings'),
 
   widget:        $('#widget'),
   widgetGlow:    $('#widget-glow'),
@@ -119,9 +120,10 @@ function showApiKey() {
     if (!el.apiUrlInput.value) {
       el.apiUrlInput.placeholder = 'https://api.deepseek.com/v1/chat/completions';
     }
+    // 等配置加载完成后再获取模型列表
+    loadModels();
   });
 
-  setTimeout(loadModels, 300);
   el.apiUrlInput.focus();
 }
 
@@ -358,18 +360,31 @@ el.apikeyBtn.addEventListener('click', async () => {
   el.apikeyBtn.disabled = false;
   el.apikeyBtn.textContent = '保存配置';
 
-  showWidget();
-  setWelcomeMessage();
-  setTimeout(async () => {
+  // 判断是否已初始化（已有 creator.json 表示非首次）
+  const hasKey = await CheckApiKey();
+  const isFirstRun = await IsFirstRun();
+
+  if (!isFirstRun && hasKey) {
+    // 二次修改配置 → 直接回到聊天界面
+    showWidget();
+    setWelcomeMessage();
     showConsole();
-    addMessage('✨ 青羽正在第一次醒来...', 'bot');
-    const initResult = await InitSelf();
-    const msgs = el.consoleBody.querySelectorAll('.message.bot');
-    if (msgs.length > 0) msgs[msgs.length - 1].remove();
-    addMessage(initResult, 'bot');
-    // 初始化完成后启动自律循环
-    await StartAutonomic();
-  }, 500);
+    addMessage('✅ 配置已更新', 'bot');
+  } else {
+    // 首次设置 → 初始化
+    showWidget();
+    setWelcomeMessage();
+    setTimeout(async () => {
+      showConsole();
+      addMessage('✨ 青羽正在第一次醒来...', 'bot');
+      const initResult = await InitSelf();
+      const msgs = el.consoleBody.querySelectorAll('.message.bot');
+      if (msgs.length > 0) msgs[msgs.length - 1].remove();
+      addMessage(initResult, 'bot');
+      // 初始化完成后启动自律循环
+      await StartAutonomic();
+    }, 500);
+  }
 });
 
 el.apikeyInput.addEventListener('keydown', (e) => {
@@ -388,6 +403,12 @@ el.widget.addEventListener('click', () => {
 // ── Console 交互 ──
 el.btnMinimize.addEventListener('click', hideConsole);
 el.btnClose.addEventListener('click', hideConsole);
+el.btnSettings.addEventListener('click', () => {
+  // 从聊天界面打开设置面板
+  hideConsole();
+  // 直接显示 API 配置面板（不经过 setup）
+  showApiKey();
+});
 
 el.chatInput.addEventListener('input', () => {
   el.chatSend.disabled = !el.chatInput.value.trim();
