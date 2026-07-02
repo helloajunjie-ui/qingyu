@@ -328,6 +328,22 @@ func (a *App) SaveConfig(apiKey, apiBaseURL, modelName string) string {
 	dnaDir := filepath.Join(RootDir, "dna")
 	os.MkdirAll(dnaDir, 0755)
 
+	// 如果 URL 或模型名为空，用当前内存值或默认值填充
+	if apiBaseURL == "" {
+		if a.apiBaseURL != "" {
+			apiBaseURL = a.apiBaseURL
+		} else {
+			apiBaseURL = DefaultApiBaseURL
+		}
+	}
+	if modelName == "" {
+		if a.modelName != "" {
+			modelName = a.modelName
+		} else {
+			modelName = DefaultModelName
+		}
+	}
+
 	cfg := Config{
 		ApiKey:     apiKey,
 		ApiBaseURL: apiBaseURL,
@@ -1197,6 +1213,9 @@ func (a *App) FetchModels() string {
 	if a.apiKey == "" {
 		return "请先配置 API Key"
 	}
+	if a.apiBaseURL == "" {
+		return "请先配置中转站地址"
+	}
 
 	// 从 baseURL 推导 models 端点
 	// 例如 https://api.xxx.com/v1/chat/completions → https://api.xxx.com/v1/models
@@ -1214,43 +1233,78 @@ func (a *App) FetchModels() string {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Sprintf("获取模型列表失败: %v", err)
+		return fmt.Sprintf("获取模型列表失败: %v\n请检查中转站地址是否正确", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		return fmt.Sprintf("获取模型列表失败 (HTTP %d)", resp.StatusCode)
-	}
-
 	body, _ := io.ReadAll(resp.Body)
 
-	// 解析 OpenAI-compatible 的模型列表响应
-	var modelsResp struct {
-		Data []struct {
-			ID     string `json:"id"`
-			Object string `json:"object"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &modelsResp); err != nil {
-		return fmt.Sprintf("解析模型列表失败: %v", err)
+	if resp.StatusCode != 200 {
+		return fmt.Sprintf("获取模型列表失败 (HTTP %d)\n响应: %s", resp.StatusCode, string(body))
 	}
 
-	if len(modelsResp.Data) == 0 {
-		return "该中转站没有可用模型"
-	}
-
-	// 构建模型列表 JSON 返回给前端
-	type modelItem struct {
+	// 尝试解析 OpenAI-compatible 标准格式: { "data": [{ "id": "...", "object": "..." }] }
+	type openAIModel struct {
 		ID     string `json:"id"`
 		Object string `json:"object"`
 	}
-	var models []modelItem
-	for _, m := range modelsResp.Data {
-		models = append(models, modelItem{ID: m.ID, Object: m.Object})
+	var standardResp struct {
+		Data []openAIModel `json:"data"`
+	}
+	if err := json.Unmarshal(body, &standardResp); err == nil && len(standardResp.Data) > 0 {
+		var models []openAIModel
+		for _, m := range standardResp.Data {
+			models = append(models, openAIModel{ID: m.ID, Object: m.Object})
+		}
+		result, _ := json.Marshal(models)
+		return string(result)
 	}
 
-	result, _ := json.Marshal(models)
-	return string(result)
+	// 兼容格式2: 直接返回数组 [{ "id": "...", "object": "..." }]
+	var directModels []openAIModel
+	if err := json.Unmarshal(body, &directModels); err == nil && len(directModels) > 0 {
+		result, _ := json.Marshal(directModels)
+		return string(result)
+	}
+
+	// 兼容格式3: { "models": [{ "id": "...", "name": "..." }] } 或 { "models": ["model1", "model2"] }
+	var modelsWrapper struct {
+		Models []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &modelsWrapper); err == nil && len(modelsWrapper.Models) > 0 {
+		var models []openAIModel
+		for _, m := range modelsWrapper.Models {
+			id := m.ID
+			if id == "" {
+				id = m.Name
+			}
+			if id != "" {
+				models = append(models, openAIModel{ID: id, Object: "model"})
+			}
+		}
+		if len(models) > 0 {
+			result, _ := json.Marshal(models)
+			return string(result)
+		}
+	}
+
+	// 兼容格式4: { "data": ["model1", "model2"] }
+	var idList struct {
+		Data []string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &idList); err == nil && len(idList.Data) > 0 {
+		var models []openAIModel
+		for _, id := range idList.Data {
+			models = append(models, openAIModel{ID: id, Object: "model"})
+		}
+		result, _ := json.Marshal(models)
+		return string(result)
+	}
+
+	return fmt.Sprintf("无法解析模型列表，响应内容:\n%s", string(body))
 }
 
 // GetConfig 返回当前配置（供前端读取）
