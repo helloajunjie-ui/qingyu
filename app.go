@@ -363,9 +363,7 @@ func (a *App) SaveConfig(apiKey, apiBaseURL, modelName string) string {
 	a.modelName = modelName
 	os.Setenv("QINGYU_API_KEY", apiKey)
 
-	// 注意：自律循环不在 SaveConfig 中启动。
-	// 首次运行时，InitSelf() 完成后由前端通知后端启动自律循环。
-	// 非首次运行时，startup() 中已启动自律循环。
+	logAudit("config", "save", fmt.Sprintf("模型=%s 中转站=%s", modelName, apiBaseURL))
 
 	return "灵魂注入成功"
 }

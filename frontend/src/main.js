@@ -336,7 +336,12 @@ el.fetchModelsBtn.addEventListener('click', loadModels);
 el.apikeyBtn.addEventListener('click', async () => {
   const apiUrl = el.apiUrlInput.value.trim();
   const key = el.apikeyInput.value.trim();
-  const model = el.modelSelect.value;
+  // 如果用户没选模型（空字符串），取第一个可用模型
+  let model = el.modelSelect.value;
+  if (!model) {
+    const firstOption = el.modelSelect.querySelector('option[value]:not([value=""])');
+    if (firstOption) model = firstOption.value;
+  }
 
   if (!key) {
     el.apikeyError.textContent = '请输入 API Key';
