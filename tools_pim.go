@@ -14,6 +14,7 @@ func init() {
 	Toolkit["todo"] = Tool{
 		Name:        "todo",
 		Description: "【待办管理】管理简单的待办事项列表。参数: action (list/add/done/clear), item (add 模式时需要), id (done 模式时需要)",
+		Category:    "秘书",
 		Execute: func(args map[string]string) string {
 			todoFile := filepath.Join(RootDir, WorkspaceDir, "todo.json")
 			action := args["action"]
@@ -87,6 +88,7 @@ func init() {
 	Toolkit["schedule"] = Tool{
 		Name:        "schedule",
 		Description: "【日程管理】管理日历日程。参数: action (add/list/get/today/week/update/delete), title (日程标题), datetime (时间，格式 2006-01-02 15:04), location (地点), note (备注), priority (优先级 high/normal/low), id (update/delete 时需要)",
+		Category:    "秘书",
 		Execute: func(args map[string]string) string {
 			schedFile := filepath.Join(RootDir, WorkspaceDir, "schedule.json")
 			action := args["action"]
@@ -297,6 +299,7 @@ func init() {
 	Toolkit["reminder"] = Tool{
 		Name:        "reminder",
 		Description: "【提醒管理】设置和管理提醒。参数: action (add/list/done/delete/clear), text (提醒内容), time (提醒时间，格式 2006-01-02 15:04), repeat (可选: once/daily/weekday，默认 once), id (done/delete 时需要)",
+		Category:    "秘书",
 		Execute: func(args map[string]string) string {
 			remindFile := filepath.Join(RootDir, WorkspaceDir, "reminders.json")
 			action := args["action"]
@@ -447,6 +450,7 @@ func init() {
 	Toolkit["timer"] = Tool{
 		Name:        "timer",
 		Description: "【计时器】秒表和倒计时。参数: action (start/stop/status/lap/countdown), name (计时器名称，默认 default), duration (countdown 模式需要，格式如 5m30s 或 90s)",
+		Category:    "秘书",
 		Execute: func(args map[string]string) string {
 			action := args["action"]
 			name := args["name"]
@@ -627,6 +631,7 @@ func init() {
 	Toolkit["note"] = Tool{
 		Name:        "note",
 		Description: "【便签/笔记】快速记录和检索笔记。参数: action (add/list/get/search/update/delete), title (标题), content (内容), keyword (search 模式时需要), id (get/update/delete 时需要)",
+		Category:    "秘书",
 		Execute: func(args map[string]string) string {
 			noteFile := filepath.Join(RootDir, WorkspaceDir, "notes.json")
 			action := args["action"]
@@ -785,6 +790,7 @@ func init() {
 	Toolkit["contacts"] = Tool{
 		Name:        "contacts",
 		Description: "【联系人管理】管理通讯录。参数: action (add/list/get/search/update/delete), name (姓名), phone (电话), email (邮箱), company (公司), remark (备注), keyword (search 时需要), id (get/update/delete 时需要)",
+		Category:    "秘书",
 		Execute: func(args map[string]string) string {
 			contactFile := filepath.Join(RootDir, WorkspaceDir, "contacts.json")
 			action := args["action"]
@@ -965,6 +971,7 @@ func init() {
 	Toolkit["recurring"] = Tool{
 		Name:        "recurring",
 		Description: "【定期事务】管理周期性事务（如每月交房租、每周例会）。参数: action (add/list/get/done/delete), title (事务名称), interval (周期: daily/weekly/monthly/yearly), day (执行日: weekly 填 1-7 周几, monthly 填 1-31 日期), time (执行时间如 10:00), note (备注), id (get/done/delete 时需要)",
+		Category:    "秘书",
 		Execute: func(args map[string]string) string {
 			recFile := filepath.Join(RootDir, WorkspaceDir, "recurring.json")
 			action := args["action"]

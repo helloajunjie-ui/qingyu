@@ -11,6 +11,7 @@ func init() {
 	Toolkit["list_dir"] = Tool{
 		Name:        "list_dir",
 		Description: "查看电脑某个目录下的文件列表。参数: path (绝对路径)",
+		Category:    "文件系统",
 		Execute: func(args map[string]string) string {
 			path := args["path"]
 			if path == "" {
@@ -42,6 +43,7 @@ func init() {
 	Toolkit["read_file"] = Tool{
 		Name:        "read_file",
 		Description: "读取电脑上的文本文件内容。参数: path (文件路径，支持相对路径)",
+		Category:    "文件系统",
 		Execute: func(args map[string]string) string {
 			path := args["path"]
 			if path == "" {
@@ -68,6 +70,7 @@ func init() {
 	Toolkit["write_file"] = Tool{
 		Name:        "write_file",
 		Description: "【文件写入】将内容写入 workspace 中的文件。参数: filename (文件名), content (文件内容)。注意：文件只能写入 workspace 目录",
+		Category:    "文件系统",
 		Execute: func(args map[string]string) string {
 			filename := args["filename"]
 			content := args["content"]
@@ -87,6 +90,7 @@ func init() {
 	Toolkit["append_file"] = Tool{
 		Name:        "append_file",
 		Description: "【文件追加】在 workspace 中的文件末尾追加内容。参数: filename (文件名), content (追加内容)",
+		Category:    "文件系统",
 		Execute: func(args map[string]string) string {
 			filename := args["filename"]
 			content := args["content"]
@@ -109,6 +113,7 @@ func init() {
 	Toolkit["search_files"] = Tool{
 		Name:        "search_files",
 		Description: "【文件搜索】在指定目录中搜索匹配关键词的文件。参数: path (目录路径，支持相对路径), keyword (搜索关键词), pattern (可选，文件通配符如 *.go *.md)",
+		Category:    "文件系统",
 		Execute: func(args map[string]string) string {
 			path := args["path"]
 			keyword := args["keyword"]
@@ -171,6 +176,7 @@ func init() {
 	Toolkit["file_info"] = Tool{
 		Name:        "file_info",
 		Description: "【文件信息】获取文件或目录的详细信息（大小、修改时间、权限等）。参数: path (文件路径，支持相对路径)",
+		Category:    "文件系统",
 		Execute: func(args map[string]string) string {
 			path := args["path"]
 			if path == "" {

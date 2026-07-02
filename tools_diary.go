@@ -13,6 +13,7 @@ func init() {
 	Toolkit["diary"] = Tool{
 		Name:        "diary",
 		Description: "📔 心情日记：记录每日心情和感悟。参数: action (write/read/today/search), mood (心情: happy/sad/calm/excited/anxious/tired), content (内容), date (日期 YYYY-MM-DD, 默认今天), keyword (搜索关键词)",
+		Category:    "日记",
 		Execute: func(args map[string]string) string {
 			diaryDir := filepath.Join(RootDir, "memories", "diary")
 			os.MkdirAll(diaryDir, 0755)

@@ -15,6 +15,7 @@ func init() {
 	Toolkit["vault"] = Tool{
 		Name:        "vault",
 		Description: "【密码保险箱】加密存储和管理密码。参数: action (add/get/list/delete/update/set_master), service (服务名), username (用户名), password (密码), master (主密码)。首次使用需先 set_master。get 操作自动复制密码到剪贴板。",
+		Category:    "安全",
 		Execute: func(args map[string]string) string {
 			action := args["action"]
 			if action == "" {

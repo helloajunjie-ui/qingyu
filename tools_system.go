@@ -19,6 +19,7 @@ func init() {
 	Toolkit["run_command"] = Tool{
 		Name:        "run_command",
 		Description: "【命令执行】在沙盒中执行系统命令（白名单限制）。参数: command (命令名), args (参数字符串)。可用命令: dir, echo, type, find, findstr, where, git, node, npm, npx, go, python, pip, ipconfig, systeminfo, tasklist",
+		Category:    "系统",
 		Execute: func(args map[string]string) string {
 			cmdName := args["command"]
 			cmdArgs := args["args"]
@@ -69,6 +70,7 @@ func init() {
 	Toolkit["system_info"] = Tool{
 		Name:        "system_info",
 		Description: "【系统信息】获取操作系统、CPU、内存等系统信息。无需参数",
+		Category:    "系统",
 		Execute: func(args map[string]string) string {
 			var sb strings.Builder
 			sb.WriteString("💻 系统信息\n")
@@ -101,6 +103,7 @@ func init() {
 	Toolkit["clipboard"] = Tool{
 		Name:        "clipboard",
 		Description: "【剪贴板】读取或写入系统剪贴板文本。参数: action (read/write), text (write 模式时需要提供)",
+		Category:    "系统",
 		Execute: func(args map[string]string) string {
 			action := args["action"]
 			if action == "" {
@@ -143,6 +146,7 @@ func init() {
 	Toolkit["qr_code"] = Tool{
 		Name:        "qr_code",
 		Description: "【二维码生成】生成二维码文本（返回 ASCII 艺术二维码）。参数: text (要编码的文本), size (可选，大小 small/medium/large，默认 medium)",
+		Category:    "系统",
 		Execute: func(args map[string]string) string {
 			text := args["text"]
 			if text == "" {

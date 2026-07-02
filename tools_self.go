@@ -16,6 +16,7 @@ func init() {
 	Toolkit["self_protect"] = Tool{
 		Name:        "self_protect",
 		Description: "【自我保护】备份、恢复、健康检查、自愈。参数: action (backup/list_backups/restore/health/self_heal/auto_archive), name (备份名称，可选，默认自动生成时间戳)",
+		Category:    "自愈",
 		Execute: func(args map[string]string) string {
 			action := args["action"]
 			if action == "" {

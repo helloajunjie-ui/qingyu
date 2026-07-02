@@ -12,6 +12,7 @@ func init() {
 	Toolkit["media"] = Tool{
 		Name:        "media",
 		Description: "🎵 媒体控制：系统音量调节和提示音播放。参数: action (volume/beep), level (0-100, 音量百分比), times (重复次数, 默认1)",
+		Category:    "媒体",
 		Execute: func(args map[string]string) string {
 			action := args["action"]
 

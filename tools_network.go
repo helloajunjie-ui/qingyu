@@ -14,6 +14,7 @@ func init() {
 	Toolkit["fetch_url"] = Tool{
 		Name:        "fetch_url",
 		Description: "【Web 触角】获取网页内容。参数: url (完整网址)",
+		Category:    "网络",
 		Execute: func(args map[string]string) string {
 			url := args["url"]
 			if url == "" {
@@ -49,6 +50,7 @@ func init() {
 	Toolkit["web_search"] = Tool{
 		Name:        "web_search",
 		Description: "【网络搜索】通过搜索引擎获取实时信息。参数: q (搜索关键词)",
+		Category:    "网络",
 		Execute: func(args map[string]string) string {
 			query := args["q"]
 			if query == "" {
@@ -108,6 +110,7 @@ func init() {
 	Toolkit["get_ip"] = Tool{
 		Name:        "get_ip",
 		Description: "【IP 查询】获取当前的公网 IP 地址。无需参数",
+		Category:    "网络",
 		Execute: func(args map[string]string) string {
 			client := &http.Client{Timeout: 10 * time.Second}
 			resp, err := client.Get("https://api.ipify.org?format=json")
@@ -131,6 +134,7 @@ func init() {
 	Toolkit["translate"] = Tool{
 		Name:        "translate",
 		Description: "【文本翻译】将文本翻译成指定语言。参数: text (要翻译的文本), to (目标语言代码，如 en, zh, ja, fr, de, es)",
+		Category:    "网络",
 		Execute: func(args map[string]string) string {
 			text := args["text"]
 			to := args["to"]
@@ -174,6 +178,7 @@ func init() {
 	Toolkit["get_weather"] = Tool{
 		Name:        "get_weather",
 		Description: "【天气查询】获取某个城市的天气信息。参数: city (城市名，如 Beijing, Shanghai, Tokyo)",
+		Category:    "网络",
 		Execute: func(args map[string]string) string {
 			city := args["city"]
 			if city == "" {

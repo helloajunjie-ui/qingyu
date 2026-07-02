@@ -26,6 +26,7 @@ func init() {
 	Toolkit["get_time"] = Tool{
 		Name:        "get_time",
 		Description: "【时间查询】获取当前的日期和时间信息。无需参数",
+		Category:    "实用",
 		Execute: func(args map[string]string) string {
 			now := time.Now()
 			return fmt.Sprintf("当前时间: %s\n日期: %s\n时区: %s\nUnix时间戳: %d",
@@ -39,6 +40,7 @@ func init() {
 	Toolkit["calc"] = Tool{
 		Name:        "calc",
 		Description: "【数学计算】计算数学表达式。参数: expr (数学表达式，如 1+2*3, sqrt(16), 2^10)",
+		Category:    "实用",
 		Execute: func(args map[string]string) string {
 			expr := args["expr"]
 			if expr == "" {
@@ -81,6 +83,7 @@ func init() {
 	Toolkit["uuid"] = Tool{
 		Name:        "uuid",
 		Description: "【UUID 生成】生成一个随机的 UUID v4。无需参数",
+		Category:    "实用",
 		Execute: func(args map[string]string) string {
 			uuid := make([]byte, 16)
 			rand.Read(uuid)
@@ -98,6 +101,7 @@ func init() {
 	Toolkit["hash"] = Tool{
 		Name:        "hash",
 		Description: "【哈希计算】计算文本或文件的哈希值。参数: text (要哈希的文本), file (可选，文件路径，与 text 二选一), algorithm (可选，md5/sha256，默认 sha256)",
+		Category:    "安全",
 		Execute: func(args map[string]string) string {
 			algo := args["algorithm"]
 			if algo == "" {
@@ -135,6 +139,7 @@ func init() {
 	Toolkit["base64"] = Tool{
 		Name:        "base64",
 		Description: "【Base64 编解码】对文本进行 Base64 编码或解码。参数: text (要处理的文本), mode (encode/decode，默认 encode)",
+		Category:    "安全",
 		Execute: func(args map[string]string) string {
 			text := args["text"]
 			mode := args["mode"]
@@ -162,6 +167,7 @@ func init() {
 	Toolkit["json_tool"] = Tool{
 		Name:        "json_tool",
 		Description: "【JSON 工具】格式化、压缩或验证 JSON 字符串。参数: text (JSON 字符串), mode (format/compress/validate，默认 format)",
+		Category:    "编码",
 		Execute: func(args map[string]string) string {
 			text := args["text"]
 			mode := args["mode"]
@@ -193,6 +199,7 @@ func init() {
 	Toolkit["csv_tool"] = Tool{
 		Name:        "csv_tool",
 		Description: "【CSV 工具】解析 CSV 文本为表格格式。参数: text (CSV 文本内容), has_header (可选，true/false，默认 true)",
+		Category:    "编码",
 		Execute: func(args map[string]string) string {
 			text := args["text"]
 			if text == "" {
@@ -230,6 +237,7 @@ func init() {
 	Toolkit["gen_password"] = Tool{
 		Name:        "gen_password",
 		Description: "【密码生成】生成安全的随机密码。参数: length (可选，长度，默认 16), use_special (可选，是否包含特殊字符，默认 true)",
+		Category:    "安全",
 		Execute: func(args map[string]string) string {
 			length := 16
 			if l := args["length"]; l != "" {
@@ -260,6 +268,7 @@ func init() {
 	Toolkit["color_tool"] = Tool{
 		Name:        "color_tool",
 		Description: "【颜色工具】颜色格式转换 (HEX/RGB/HSL)。参数: value (颜色值，如 #ff0000 或 rgb(255,0,0)), format (目标格式: hex/rgb/hsl)",
+		Category:    "编码",
 		Execute: func(args map[string]string) string {
 			value := args["value"]
 			format := args["format"]
@@ -340,6 +349,7 @@ func init() {
 	Toolkit["zip_tool"] = Tool{
 		Name:        "zip_tool",
 		Description: "【压缩工具】创建或解压 ZIP 归档。参数: action (create/extract/list), source (源文件/目录路径), target (目标 zip 路径，仅 create/extract 需要)",
+		Category:    "归档",
 		Execute: func(args map[string]string) string {
 			action := args["action"]
 			source := args["source"]

@@ -31,6 +31,7 @@ const (
 type Tool struct {
 	Name        string
 	Description string
+	Category    string // 分类：文件系统/网络/记忆/系统/实用/安全/编码/归档/秘书/自愈/媒体/日记
 	Execute     func(args map[string]string) string
 }
 
@@ -279,12 +280,50 @@ func tryClipboardWrite(text string) string {
 	return ""
 }
 
-// GetAvailableTools 生成给大脑看的"书柜目录"
+// GetAvailableTools 生成按分类组织的"书柜目录"
 func GetAvailableTools() string {
-	var sb strings.Builder
-	sb.WriteString("【可用工具列表】\n")
+	type categoryInfo struct {
+		Icon  string
+		Order int
+	}
+	categories := map[string]categoryInfo{
+		"文件系统": {"📁", 1},
+		"网络":   {"🌐", 2},
+		"记忆":   {"🧠", 3},
+		"系统":   {"💻", 4},
+		"实用":   {"🔧", 5},
+		"安全":   {"🔐", 6},
+		"编码":   {"🎨", 7},
+		"归档":   {"📦", 8},
+		"秘书":   {"📅", 9},
+		"自愈":   {"🛡", 10},
+		"媒体":   {"🎵", 11},
+		"日记":   {"📔", 12},
+	}
+
+	// 按分类分组
+	grouped := make(map[string][]Tool)
 	for _, tool := range Toolkit {
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", tool.Name, tool.Description))
+		cat := tool.Category
+		if cat == "" {
+			cat = "其他"
+		}
+		grouped[cat] = append(grouped[cat], tool)
+	}
+
+	// 按定义顺序输出
+	var sb strings.Builder
+	sb.WriteString("【📚 书柜目录】\n\n")
+	for cat, info := range categories {
+		tools, ok := grouped[cat]
+		if !ok || len(tools) == 0 {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("%s %s\n", info.Icon, cat))
+		for _, t := range tools {
+			sb.WriteString(fmt.Sprintf("  · %s: %s\n", t.Name, t.Description))
+		}
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

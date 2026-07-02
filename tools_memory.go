@@ -11,6 +11,7 @@ func init() {
 	Toolkit["memorize"] = Tool{
 		Name:        "memorize",
 		Description: "存储一条记忆到长期记忆系统。支持设置重要性(1-10)、话题标签和关联链接。",
+		Category:    "记忆",
 		Execute: func(args map[string]string) string {
 			content := args["content"]
 			if content == "" {
@@ -63,6 +64,7 @@ func init() {
 	Toolkit["recall"] = Tool{
 		Name:        "recall",
 		Description: "从长期记忆中检索。支持关键词搜索、话题筛选、重要性过滤。",
+		Category:    "记忆",
 		Execute: func(args map[string]string) string {
 			query := SearchQuery{
 				Topic:         args["topic"],
@@ -120,6 +122,7 @@ func init() {
 	Toolkit["forget"] = Tool{
 		Name:        "forget",
 		Description: "删除指定ID的记忆，或按话题删除一组记忆。默认软删除(移入回收站)。",
+		Category:    "记忆",
 		Execute: func(args map[string]string) string {
 			id := args["id"]
 			topic := args["topic"]
@@ -160,6 +163,7 @@ func init() {
 	Toolkit["memory_stats"] = Tool{
 		Name:        "memory_stats",
 		Description: "查看记忆系统的统计信息，包括总记忆数、话题分布、核心记忆数等。",
+		Category:    "记忆",
 		Execute: func(args map[string]string) string {
 			store := GetMemoryStore()
 			stats := store.Stats()
@@ -217,6 +221,7 @@ func init() {
 	Toolkit["memory_link"] = Tool{
 		Name:        "memory_link",
 		Description: "管理记忆之间的关联链接。支持 link（建立关联）和 unlink（解除关联）操作。",
+		Category:    "记忆",
 		Execute: func(args map[string]string) string {
 			action := args["action"]
 			id1 := args["id1"]
@@ -251,6 +256,7 @@ func init() {
 	Toolkit["migrate_memory"] = Tool{
 		Name:        "migrate_memory",
 		Description: "将旧格式的 .md 记忆文件迁移到新的结构化 JSON 存储系统。",
+		Category:    "记忆",
 		Execute: func(args map[string]string) string {
 			store := GetMemoryStore()
 			count, err := store.MigrateOldFormat()
@@ -267,6 +273,7 @@ func init() {
 	Toolkit["decay_memory"] = Tool{
 		Name:        "decay_memory",
 		Description: "手动触发记忆衰减过程：长期未访问的记忆将降级或归档/删除。",
+		Category:    "记忆",
 		Execute: func(args map[string]string) string {
 			store := GetMemoryStore()
 			archived, deleted, err := store.Decay()
