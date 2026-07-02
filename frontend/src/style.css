@@ -403,6 +403,8 @@ html, body {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
 }
 
 .console-dot {
@@ -423,6 +425,15 @@ html, body {
 .console-dot.offline {
   background: var(--danger);
   box-shadow: 0 0 6px var(--danger-glow);
+}
+
+.console-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+  margin-right: 12px;
+  white-space: nowrap;
+  --wails-draggable: no-drag;
 }
 
 .console-actions {

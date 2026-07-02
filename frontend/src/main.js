@@ -36,6 +36,7 @@ const el = {
   console:       $('#console'),
   consoleBody:   $('#console-body'),
   consoleDot:    $('#console-dot'),
+  consoleStatus: $('#console-status'),
   consoleName:   $('#console-name'),
   chatInput:     $('#chat-input'),
   chatSend:      $('#chat-send'),
@@ -624,7 +625,7 @@ function updateHeartbeatUI(state) {
     const label = phaseLabels[state.phase] || state.phase;
     const moodEmoji = { calm: '☁️', curious: '🔍', focused: '🎯', idle: '💤' };
     const emoji = moodEmoji[state.mood] || '💫';
-    el.consoleDot.textContent = `💓 ${state.beat} · ${label} ${emoji}`;
+    el.consoleStatus.textContent = `💓 ${state.beat} · ${label} ${emoji}`;
   }
 }
 
