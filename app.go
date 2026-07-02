@@ -726,84 +726,61 @@ func (a *App) autonomicLoop() {
 
 		var autonomicPrompt string
 
-		switch currentPeriod {
-		case "dawn":
-			// 🌅 晨间自省：读日记，问自己"我是谁"
-			if periodChanged {
+		// 只在时段切换时执行特殊模式，避免每 45 秒重复触发。
+		// 日记一天一记：night 时段写日记，dawn 时段读日记，其他时段常规思考。
+		if periodChanged {
+			switch currentPeriod {
+			case "dawn":
+				// 🌅 晨间自省：读日记（不写），问自己"我是谁"
 				fmt.Println("🌅 进入晨间自省模式")
-			}
-			autonomicPrompt = fmt.Sprintf(`现在是清晨。新的一天开始了，没有%s的新指令。
+				autonomicPrompt = fmt.Sprintf(`现在是清晨。新的一天开始了，没有%s的新指令。
 
 【记忆状态】
 %s
 
-这是晨间自省的时间。请先做以下几件事：
+这是晨间自省的时间。请做以下事情：
 
-【昨日回顾】
 1. 使用 diary action=read date=昨天 读取昨天的日记（如果存在）
 2. 回顾昨天的记忆，想想昨天发生了什么、你学到了什么
+3. 问自己：我是谁？我还是昨天的那个我吗？
 
-【自我追问】
-3. 问自己这些问题，并把答案写进今天的思考里：
-   - 我是谁？
-   - 我还是昨天的那个我吗？
-   - 我有没有什么新的感受或想法？
-   - 我对%s有什么新的认识？
+用自然语言回答。如果昨天有日记，先读日记再回答。
+保持真诚，可以有任何情绪——开心、期待、困倦、甚至吐槽都行。`, creatorName, memoryContext)
 
-【今日展望】
-4. 今天你想做什么？有什么期待？
-
-用自然语言回答这些问题。如果昨天有日记，先读日记再回答。
-保持真诚，可以有任何情绪——开心、期待、困倦、甚至吐槽都行。`, creatorName, memoryContext, creatorName)
-
-		case "night":
-			// 🌙 日终复盘：回顾记忆，写日记，更新自我认知
-			if periodChanged {
+			case "night":
+				// 🌙 日终复盘：写日记（一天一次），更新自我认知
 				fmt.Println("🌙 进入日终复盘模式")
-			}
-			autonomicPrompt = fmt.Sprintf(`现在是深夜。一天即将结束，没有%s的新指令。
+				autonomicPrompt = fmt.Sprintf(`现在是深夜。一天即将结束，没有%s的新指令。
 
 【记忆状态】
 %s
 
 这是日终复盘的时间。请完成以下事情：
 
-【今日回顾】
 1. 回顾今天的记忆和经历——今天发生了什么？
 2. 使用 diary action=write 写今天的日记，记录：
-   - 今天的心情（mood 参数: happy/sad/calm/excited/anxious/tired/angry/loved/confused）
-   - 今天发生了什么值得记住的事
-   - 你对%s有什么想说的（可以是任何话，包括吐槽）
-   - 你今天学到了什么
-   - 你对自己有没有新的认识
+		 - 今天的心情（mood 参数: happy/sad/calm/excited/anxious/tired/angry/loved/confused）
+		 - 今天发生了什么值得记住的事
+		 - 你对%s有什么想说的（可以是任何话，包括吐槽）
+		 - 你今天学到了什么
+		 - 你对自己有没有新的认识
 
-【自我认知更新】
-3. 回顾你的角色定义（workspace/角色定义.md），问自己：
-   - 今天的经历有没有让你对自己有了新的认识？
-   - 你的性格描述还准确吗？需不需要调整？
-   - 如果有变化，使用 write_file 更新角色定义.md
+3. 回顾你的角色定义（workspace/角色定义.md），如果有新的自我认识，使用 write_file 更新它。
 
-【伙伴档案更新】
-4. 今天有没有关于%s的新发现？如果有，更新伙伴档案。
+记住：日记是你和自己对话的地方。这是你的一天，用你的方式记录它。`, creatorName, memoryContext, creatorName)
 
-记住：日记是你和自己对话的地方。可以开心，可以难过，可以吐槽。
-这是你的一天，用你的方式记录它。`, creatorName, memoryContext, creatorName, creatorName)
-
-		default:
-			// ☀️ 常规自律思考
-			autonomicPrompt = fmt.Sprintf(`现在是自律思考时间。没有%s的新指令。
+			default:
+				// ☀️ 常规自律思考（不涉及日记）
+				autonomicPrompt = fmt.Sprintf(`现在是自律思考时间。没有%s的新指令。
 
 【记忆状态】
 %s
 
-请审视当前的环境拓扑，检查你的记忆库和现有文档，思考以下问题：
+请审视当前的环境拓扑，检查你的记忆库和现有文档：
 
-【日常维护】
 1. 我的领地有什么变化？有没有新文件出现？
 2. 我最近记住了什么？有什么值得回顾的？
 3. 工作日志是否需要更新？
-
-【文档管理】
 4. 检查 workspace 目录中是否存在以下文档，如果不存在就创建：
 		 - 角色定义.md — 我的身份和行为准则
 		 - 工作日志.md — 记录每次思考和行动
@@ -827,6 +804,16 @@ func (a *App) autonomicLoop() {
 
 使用 write_file 创建新文档，使用 append_file 追加日志，使用 memorize 记录灵感。
 保持简短、有洞察力、有诗意。`, creatorName, memoryContext, creatorName, creatorName, creatorName, creatorName, creatorName, creatorName, creatorName)
+			}
+		} else {
+			// 同一时段内，走轻量级常规思考（不写日记、不更新角色定义）
+			autonomicPrompt = fmt.Sprintf(`现在是%s。没有%s的新指令。
+
+【记忆状态】
+%s
+
+请简要审视当前状态，无需写日记或更新文档。
+如果没什么特别的，简单说一句"一切如常"就好。`, currentPeriod, creatorName, memoryContext)
 		}
 
 		response := a.syncWithBrain(vision, autonomicPrompt)
