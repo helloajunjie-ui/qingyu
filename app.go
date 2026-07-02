@@ -1163,7 +1163,13 @@ func (a *App) syncWithBrain(visionContext, prompt string) string {
 
 	jsonData, _ := json.Marshal(payload)
 
-	req, _ := http.NewRequest("POST", a.apiBaseURL, bytes.NewBuffer(jsonData))
+	// 确保 URL 以 /chat/completions 结尾（兼容用户只配了 base URL 如 https://api.xxx.com/v1 的情况）
+	apiURL := a.apiBaseURL
+	if !strings.HasSuffix(apiURL, "/chat/completions") {
+		apiURL = strings.TrimRight(apiURL, "/") + "/chat/completions"
+	}
+
+	req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
 

@@ -117,9 +117,9 @@ function showApiKey() {
       if (cfg.api_key) el.apikeyInput.value = cfg.api_key;
       if (cfg.model_name) el.modelSelect.dataset.currentModel = cfg.model_name;
     } catch (_) {}
-    // 如果 URL 为空，填入默认占位提示
+    // 如果 URL 为空，填入默认值（确保能正确持久化到 config.json）
     if (!el.apiUrlInput.value) {
-      el.apiUrlInput.placeholder = 'https://api.deepseek.com/v1/chat/completions';
+      el.apiUrlInput.value = 'https://api.deepseek.com/v1/chat/completions';
     }
     // 等配置加载完成后再获取模型列表
     loadModels();
