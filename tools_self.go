@@ -41,7 +41,7 @@ func init() {
 				filepath.Join(RootDir, "memories", "creator.json"),
 				filepath.Join(RootDir, "workspace", "角色定义.md"),
 				filepath.Join(RootDir, "workspace", "书柜清单.md"),
-				filepath.Join(RootDir, "workspace", "造物主档案.md"),
+				filepath.Join(RootDir, "workspace", "伙伴档案.md"),
 				filepath.Join(RootDir, "workspace", "schedule.json"),
 				filepath.Join(RootDir, "workspace", "notes.json"),
 				filepath.Join(RootDir, "workspace", "contacts.json"),
@@ -259,7 +259,7 @@ func init() {
 
 				creatorPath := filepath.Join(RootDir, "memories", "creator.json")
 				if data, err := os.ReadFile(creatorPath); err != nil || !json.Valid(data) {
-					defaultCreator := `{"name":"造物主"}`
+					defaultCreator := `{"name":"伙伴"}`
 					os.WriteFile(creatorPath, []byte(defaultCreator), 0600)
 					sb.WriteString("  🔧 creator.json — 已重置\n")
 					fixed++

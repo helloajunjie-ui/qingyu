@@ -12,7 +12,7 @@ import (
 func init() {
 	Toolkit["diary"] = Tool{
 		Name:        "diary",
-		Description: "📔 心情日记：记录每日心情和感悟。参数: action (write/read/today/search), mood (心情: happy/sad/calm/excited/anxious/tired), content (内容), date (日期 YYYY-MM-DD, 默认今天), keyword (搜索关键词)",
+		Description: "📔 心情日记：记录每日心情和感悟。参数: action (write/read/today/search/list), mood (心情: happy/sad/calm/excited/anxious/tired/angry), content (内容), date (日期 YYYY-MM-DD, 默认今天), keyword (搜索关键词)",
 		Category:    "日记",
 		Execute: func(args map[string]string) string {
 			diaryDir := filepath.Join(RootDir, "memories", "diary")
@@ -27,6 +27,7 @@ func init() {
 			moodEmoji := map[string]string{
 				"happy": "😊", "sad": "😢", "calm": "😌",
 				"excited": "🎉", "anxious": "😰", "tired": "😴",
+				"angry": "😤", "loved": "🥰", "confused": "🤔",
 			}
 
 			switch action {
@@ -84,6 +85,40 @@ func init() {
 				}
 				return fmt.Sprintf("📔 今天的心情: %s %s\n%s", emoji, entry["mood"], entry["content"])
 
+			case "list":
+				entries, _ := os.ReadDir(diaryDir)
+				if len(entries) == 0 {
+					return "📔 还没有写过日记呢"
+				}
+				var results []string
+				for _, e := range entries {
+					if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+						continue
+					}
+					data, _ := os.ReadFile(filepath.Join(diaryDir, e.Name()))
+					var entry map[string]string
+					json.Unmarshal(data, &entry)
+					emoji := moodEmoji[entry["mood"]]
+					if emoji == "" {
+						emoji = "📝"
+					}
+					dateName := strings.TrimSuffix(e.Name(), ".json")
+					contentPreview := entry["content"]
+					if len([]rune(contentPreview)) > 40 {
+						contentPreview = string([]rune(contentPreview)[:40]) + "..."
+					}
+					results = append(results, fmt.Sprintf("📔 %s %s [%s] %s", emoji, dateName, entry["mood"], contentPreview))
+				}
+				// 按日期倒序（最新的在前）
+				for i := 0; i < len(results); i++ {
+					for j := i + 1; j < len(results); j++ {
+						if results[j] > results[i] {
+							results[i], results[j] = results[j], results[i]
+						}
+					}
+				}
+				return "📔 我的日记本:\n" + strings.Join(results, "\n")
+
 			case "search":
 				keyword := args["keyword"]
 				if keyword == "" {
@@ -113,7 +148,7 @@ func init() {
 				return "📔 搜索结果:\n" + strings.Join(results, "\n")
 
 			default:
-				return "❌ 未知操作，可选: write, read, today, search"
+				return "❌ 未知操作，可选: write, read, today, list, search"
 			}
 		},
 	}

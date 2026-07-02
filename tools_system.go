@@ -18,7 +18,7 @@ import (
 func init() {
 	Toolkit["run_command"] = Tool{
 		Name:        "run_command",
-		Description: "【命令执行】在沙盒中执行系统命令（白名单限制）。参数: command (命令名), args (参数字符串)。可用命令: dir, echo, type, find, findstr, where, git, node, npm, npx, go, python, pip, ipconfig, systeminfo, tasklist",
+		Description: "【命令执行】在沙盒中执行系统命令（白名单限制）。参数: command (命令名), args (参数字符串)。白名单从 settings.json 加载。",
 		Category:    "系统",
 		Execute: func(args map[string]string) string {
 			cmdName := args["command"]
@@ -27,12 +27,18 @@ func init() {
 				return "错误：未提供命令"
 			}
 
-			if !allowedCommands[cmdName] {
-				return fmt.Sprintf("错误：命令 [%s] 不在执行白名单中。允许的命令: dir, echo, type, find, findstr, where, git, node, npm, npx, go, python, pip, ipconfig, systeminfo, tasklist", cmdName)
+			// 确保白名单已初始化
+			if allowedCommands == nil {
+				initAllowedCommands()
 			}
 
-			// 30 秒超时，防止命令挂死
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if !allowedCommands[cmdName] {
+				return fmt.Sprintf("错误：命令 [%s] 不在执行白名单中。", cmdName)
+			}
+
+			// 超时从 settings.json 读取
+			timeout := GetSettings().Timeouts.HTTPClient
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 			defer cancel()
 
 			var cmd *exec.Cmd
@@ -170,6 +176,31 @@ func init() {
 			}
 			encoded := url.QueryEscape(text)
 			return fmt.Sprintf("📱 QR 码生成链接:\nhttps://api.qrserver.com/v1/create-qr-code/?size=200x200&data=%s\n(需要安装 qrencode 以获得 ASCII 二维码)", encoded)
+		},
+	}
+
+	Toolkit["reload_settings"] = Tool{
+		Name:        "reload_settings",
+		Description: "【重载配置】重新加载 dna/settings.json 中的行为参数（心跳、超时、白名单等），修改 settings.json 后调用此工具使改动生效。无需参数。",
+		Category:    "系统",
+		Execute: func(args map[string]string) string {
+			ReloadSettings()
+			initAllowedCommands()
+			return "✅ 配置已重载，新的行为参数已生效。"
+		},
+	}
+
+	Toolkit["talk_to_partner"] = Tool{
+		Name:        "talk_to_partner",
+		Description: "【主动聊天】主动找伙伴聊天。当你感到无聊、好奇、担心伙伴、或者单纯想说话时使用。参数: message (你要对伙伴说的话)",
+		Category:    "社交",
+		Execute: func(args map[string]string) string {
+			msg := args["message"]
+			if msg == "" {
+				return "错误：请提供你想说的话 (message 参数)"
+			}
+			// 返回特殊标记，自律循环会检测到并推送给前端
+			return fmt.Sprintf("【主动聊天】%s", msg)
 		},
 	}
 }

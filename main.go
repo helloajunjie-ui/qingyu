@@ -14,25 +14,26 @@ var assets embed.FS
 
 func main() {
 	app := NewApp()
+	win := GetSettings().Window
 
 	err := wails.Run(&options.App{
-		Title:       "青羽",
-		Width:       80,
-		Height:      80,
-		MinWidth:    80,
-		MinHeight:   80,
-		AlwaysOnTop: true,
+		Title:       win.Title,
+		Width:       win.Width,
+		Height:      win.Height,
+		MinWidth:    win.MinWidth,
+		MinHeight:   win.MinHeight,
+		AlwaysOnTop: win.AlwaysOnTop,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0},
 		OnStartup:        app.startup,
 		Windows: &windows.Options{
-			WebviewIsTransparent: true,
-			WindowIsTranslucent:  true,
-			DisableWindowIcon:    true,
+			WebviewIsTransparent: win.Transparent,
+			WindowIsTranslucent:  win.Transparent,
+			DisableWindowIcon:    win.DisableIcon,
 		},
-		Frameless: true,
+		Frameless: win.Frameless,
 		Bind: []interface{}{
 			app,
 		},

@@ -65,3 +65,7 @@ export function SetCreatorName(arg1) {
 export function SetHeartbeatPhase(arg1, arg2) {
   return window['go']['main']['App']['SetHeartbeatPhase'](arg1, arg2);
 }
+
+export function StartAutonomic() {
+  return window['go']['main']['App']['StartAutonomic']();
+}

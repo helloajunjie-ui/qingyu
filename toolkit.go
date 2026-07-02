@@ -23,8 +23,9 @@ import (
 // 空间常量
 const (
 	RootDir      = "."
-	MemoryDir    = "memories"
-	WorkspaceDir = "workspace"
+	MemoryDir    = "memories"  // 青羽的记忆空间
+	WorkspaceDir = "workspace" // 青羽的生活空间（角色定义、日记、知识体系）
+	WorkDir      = "workdir"   // 你的工作区（临时文件、附件、下载等，与青羽空间隔离）
 )
 
 // Tool 定义了"书柜"里的每一本书（工具）的标准接口
@@ -35,24 +36,16 @@ type Tool struct {
 	Execute     func(args map[string]string) string
 }
 
-// 安全沙盒：允许执行的命令白名单
-var allowedCommands = map[string]bool{
-	"dir":        true,
-	"echo":       true,
-	"type":       true,
-	"find":       true,
-	"findstr":    true,
-	"where":      true,
-	"git":        true,
-	"node":       true,
-	"npm":        true,
-	"npx":        true,
-	"go":         true,
-	"python":     true,
-	"pip":        true,
-	"ipconfig":   true,
-	"systeminfo": true,
-	"tasklist":   true,
+// 安全沙盒：允许执行的命令白名单（从 settings.json 加载）
+var allowedCommands map[string]bool
+
+// initAllowedCommands 从配置初始化命令白名单
+func initAllowedCommands() {
+	allowedCommands = make(map[string]bool)
+	cmds := GetSettings().Security.AllowedCommands
+	for _, cmd := range cmds {
+		allowedCommands[cmd] = true
+	}
 }
 
 // Toolkit 青羽的专属书柜（各工具通过 init() 在独立文件中注册）
@@ -299,6 +292,8 @@ func GetAvailableTools() string {
 		"自愈":   {"🛡", 10},
 		"媒体":   {"🎵", 11},
 		"日记":   {"📔", 12},
+		"文档":   {"📄", 13},
+		"社交":   {"💬", 14},
 	}
 
 	// 按分类分组

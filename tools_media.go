@@ -28,7 +28,7 @@ func init() {
 				}
 				if runtime.GOOS == "windows" {
 					cmd := exec.Command("powershell", "-c",
-						fmt.Sprintf(`(New-Object -ComObject WScript.Shell).SendKeys([char]173)`, vol))
+						`(New-Object -ComObject WScript.Shell).SendKeys([char]173)`)
 					cmd.Run()
 				}
 				return fmt.Sprintf("🔊 音量已设置为 %d%%", vol)

@@ -21,7 +21,7 @@ func init() {
 				return "错误：未提供 URL"
 			}
 
-			client := &http.Client{Timeout: 15 * time.Second}
+			client := &http.Client{Timeout: time.Duration(GetSettings().Timeouts.NetworkFetch) * time.Second}
 			req, err := http.NewRequest("GET", url, nil)
 			if err != nil {
 				return fmt.Sprintf("请求构建失败: %v", err)

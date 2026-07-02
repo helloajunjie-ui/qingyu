@@ -32,3 +32,5 @@ export function SetAPIKey(arg1:string):Promise<void>;
 export function SetCreatorName(arg1:string):Promise<string>;
 
 export function SetHeartbeatPhase(arg1:string,arg2:string):Promise<void>;
+
+export function StartAutonomic():Promise<string>;
