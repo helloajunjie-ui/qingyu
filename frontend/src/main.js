@@ -405,9 +405,25 @@ el.btnMinimize.addEventListener('click', hideConsole);
 el.btnClose.addEventListener('click', hideConsole);
 el.btnSettings.addEventListener('click', () => {
   // 从聊天界面打开设置面板
-  hideConsole();
-  // 直接显示 API 配置面板（不经过 setup）
-  showApiKey();
+  // 不经过 hideConsole（避免缩成 widget 再弹窗），直接切面板
+  el.console.classList.add('hidden');
+  el.apikeyPanel.classList.remove('hidden');
+  morphWindow(380, 360);
+  snapToCenter(380, 360);
+  // 加载配置
+  GetConfig().then(cfgStr => {
+    try {
+      const cfg = JSON.parse(cfgStr);
+      if (cfg.api_base_url) el.apiUrlInput.value = cfg.api_base_url;
+      if (cfg.api_key) el.apikeyInput.value = cfg.api_key;
+      if (cfg.model_name) el.modelSelect.dataset.currentModel = cfg.model_name;
+    } catch (_) {}
+    if (!el.apiUrlInput.value) {
+      el.apiUrlInput.placeholder = 'https://api.deepseek.com/v1/chat/completions';
+    }
+    loadModels();
+  });
+  el.apiUrlInput.focus();
 });
 
 el.chatInput.addEventListener('input', () => {
