@@ -66,6 +66,10 @@ export function SetHeartbeatPhase(arg1, arg2) {
   return window['go']['main']['App']['SetHeartbeatPhase'](arg1, arg2);
 }
 
+export function Shutdown() {
+  return window['go']['main']['App']['Shutdown']();
+}
+
 export function StartAutonomic() {
   return window['go']['main']['App']['StartAutonomic']();
 }

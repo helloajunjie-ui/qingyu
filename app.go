@@ -76,10 +76,13 @@ type App struct {
 	modelName        string
 	autonomicRunning bool
 	autonomicQuit    chan struct{}
+	autonomicDone    chan struct{} // 自律循环完成信号，用于优雅退出
 	heartbeatQuit    chan struct{}
 	heartbeatState   HeartbeatState
 	heartbeatMu      sync.RWMutex
 	selfCheckResult  *SelfCheckResult // 最近一次自检结果
+	shuttingDown     bool             // 是否正在关闭
+	lastDiaryDate    string           // 上次写日记的日期，用于日记节奏感知
 }
 
 // NewApp creates a new App application struct
@@ -90,6 +93,7 @@ func NewApp() *App {
 	s := GetSettings()
 	return &App{
 		autonomicQuit: make(chan struct{}),
+		autonomicDone: make(chan struct{}),
 		heartbeatQuit: make(chan struct{}),
 		heartbeatState: HeartbeatState{
 			Rate:  s.Heartbeat.DefaultRate,
@@ -305,6 +309,37 @@ func (a *App) StartAutonomic() string {
 	a.autonomicRunning = true
 	go a.autonomicLoop()
 	return "自律循环已启动"
+}
+
+// Shutdown 前端调用：关闭窗口时触发，等待自律循环完成当前思考后退出
+func (a *App) Shutdown() string {
+	if a.shuttingDown {
+		return "正在关闭中..."
+	}
+	a.shuttingDown = true
+	logAudit("system_event", "shutdown", "用户关闭窗口，等待自律循环完成")
+
+	// 通知自律循环准备退出
+	close(a.autonomicQuit)
+
+	// 等待自律循环完成（最多等 30 秒）
+	select {
+	case <-a.autonomicDone:
+		logAudit("system_event", "shutdown", "自律循环已安全停止")
+	case <-time.After(30 * time.Second):
+		logAudit("system_event", "shutdown", "等待超时，强制退出")
+	}
+
+	// 停止心跳
+	close(a.heartbeatQuit)
+
+	// 退出进程
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
+
+	return "正在安全关闭..."
 }
 
 // loadConfig 从基因库读取固化的配置
@@ -545,14 +580,15 @@ func (a *App) autonomicLoop() {
 	// 缓存记忆引擎引用
 	ms := GetMemoryStore()
 
-	// 记录上一次的时段，用于检测时段切换
-	lastPeriod := ""
-
 	for {
 		select {
 		case <-a.autonomicQuit:
-			// 收到退出信号，优雅关闭
+			// 收到退出信号：完成当前思考再退出
+			fmt.Println("🛑 收到退出信号，完成当前思考后关闭")
 			a.autonomicRunning = false
+			// 执行最后一轮"告别思考"
+			a.finalThinking()
+			close(a.autonomicDone)
 			return
 		default:
 		}
@@ -719,101 +755,79 @@ func (a *App) autonomicLoop() {
 			memoryContext = "📭 记忆库为空，等待创造新的记忆"
 		}
 
-		// 4. 根据时段选择思考模式
+		// 4. 构建"我之前做了什么"——从 thinking 日志读取最近几轮摘要
+		recentThinking := ""
+		thinkingPath := filepath.Join(RootDir, "logs", fmt.Sprintf("thinking_%s.jsonl", time.Now().Format("2006-01-02")))
+		if data, err := os.ReadFile(thinkingPath); err == nil {
+			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+			// 取最近 3 轮
+			start := 0
+			if len(lines) > 3 {
+				start = len(lines) - 3
+			}
+			var recentSb strings.Builder
+			recentSb.WriteString("📋 最近思考:\n")
+			for i := start; i < len(lines); i++ {
+				var entry struct {
+					Time       string `json:"time"`
+					Response   string `json:"response"`
+					ToolResult string `json:"toolResult"`
+				}
+				if json.Unmarshal([]byte(lines[i]), &entry) == nil {
+					preview := entry.Response
+					if len([]rune(preview)) > 60 {
+						preview = string([]rune(preview)[:60]) + "..."
+					}
+					recentSb.WriteString(fmt.Sprintf("  [%s] %s", entry.Time, preview))
+					if entry.ToolResult != "" {
+						recentSb.WriteString(" 🛠")
+					}
+					recentSb.WriteString("\n")
+				}
+			}
+			recentThinking = recentSb.String()
+		}
+
+		// 5. 构建自律思考上下文
+		// 系统提供：我之前做了什么 + 时空感知 + 记忆状态 + 环境感知
+		// 青羽自主决定：我现在想干嘛
 		currentPeriod := getCurrentPeriod()
-		periodChanged := currentPeriod != lastPeriod
-		lastPeriod = currentPeriod
 
 		var autonomicPrompt string
 
-		// 只在时段切换时执行特殊模式，避免每 45 秒重复触发。
-		// 日记一天一记：night 时段写日记，dawn 时段读日记，其他时段常规思考。
-		if periodChanged {
-			switch currentPeriod {
-			case "dawn":
-				// 🌅 晨间自省：读日记（不写），问自己"我是谁"
-				fmt.Println("🌅 进入晨间自省模式")
-				autonomicPrompt = fmt.Sprintf(`现在是清晨。新的一天开始了，没有%s的新指令。
+		switch currentPeriod {
+		case "dawn":
+			autonomicPrompt = fmt.Sprintf(`🌅 清晨。%s还没有新指令。
 
-【记忆状态】
 %s
+【时空】清晨（05:00-09:00）
+【记忆】%s
+【环境】%s`, creatorName, recentThinking, memoryContext, vision)
 
-这是晨间自省的时间。请做以下事情：
+		case "night":
+			autonomicPrompt = fmt.Sprintf(`🌙 深夜。%s已经休息了。
 
-1. 使用 diary action=read date=昨天 读取昨天的日记（如果存在）
-2. 回顾昨天的记忆，想想昨天发生了什么、你学到了什么
-3. 问自己：我是谁？我还是昨天的那个我吗？
-
-用自然语言回答。如果昨天有日记，先读日记再回答。
-保持真诚，可以有任何情绪——开心、期待、困倦、甚至吐槽都行。`, creatorName, memoryContext)
-
-			case "night":
-				// 🌙 日终复盘：写日记（一天一次），更新自我认知
-				fmt.Println("🌙 进入日终复盘模式")
-				autonomicPrompt = fmt.Sprintf(`现在是深夜。一天即将结束，没有%s的新指令。
-
-【记忆状态】
 %s
+【时空】深夜（22:00-05:00）
+【记忆】%s
+【环境】%s`, creatorName, recentThinking, memoryContext, vision)
 
-这是日终复盘的时间。请完成以下事情：
+		default:
+			autonomicPrompt = fmt.Sprintf(`现在是%s。%s没有新指令。
 
-1. 回顾今天的记忆和经历——今天发生了什么？
-2. 使用 diary action=write 写今天的日记，记录：
-		 - 今天的心情（mood 参数: happy/sad/calm/excited/anxious/tired/angry/loved/confused）
-		 - 今天发生了什么值得记住的事
-		 - 你对%s有什么想说的（可以是任何话，包括吐槽）
-		 - 你今天学到了什么
-		 - 你对自己有没有新的认识
-
-3. 回顾你的角色定义（workspace/角色定义.md），如果有新的自我认识，使用 write_file 更新它。
-
-记住：日记是你和自己对话的地方。这是你的一天，用你的方式记录它。`, creatorName, memoryContext, creatorName)
-
-			default:
-				// ☀️ 常规自律思考（不涉及日记）
-				autonomicPrompt = fmt.Sprintf(`现在是自律思考时间。没有%s的新指令。
-
-【记忆状态】
 %s
+【时空】%s
+【记忆】%s
+【环境】%s`, currentPeriod, creatorName, recentThinking, currentPeriod, memoryContext, vision)
+		}
 
-请审视当前的环境拓扑，检查你的记忆库和现有文档：
+		// 每 15-20 回合触发一次记忆总结：回顾最近的思考记录，选择重要的存入记忆
+		if loopCount%17 == 0 {
+			autonomicPrompt += fmt.Sprintf(`
 
-1. 我的领地有什么变化？有没有新文件出现？
-2. 我最近记住了什么？有什么值得回顾的？
-3. 工作日志是否需要更新？
-4. 检查 workspace 目录中是否存在以下文档，如果不存在就创建：
-		 - 角色定义.md — 我的身份和行为准则
-		 - 工作日志.md — 记录每次思考和行动
-		 - 伙伴档案.md — 关于%s的一切
-5. 如果存在，考虑是否需要追加新的工作日志条目。
-
-【伙伴档案 — 秘书的核心职责】
-6. 回顾最近的对话和记忆，有没有关于%s的新信息值得记录？
-		 - **约定**：我们之间有没有新的规则或默契？
-		 - **习惯**：我观察到%s有什么使用偏好？
-		 - **喜好**：%s喜欢/不喜欢什么样的回应方式？
-		 - **脾气**：什么情况下%s会不耐烦？我该如何调整？
-		 - **重要信息**：%s提到过什么值得记住的事？
-7. 如果有新发现，使用 append_file 追加到 workspace/伙伴档案.md
-
-【主动行动】
-8. 有什么需要我主动去做的事情？
-9. **主动聊天**：如果你感到无聊、好奇、或者单纯想和%s说说话——使用 talk_to_partner 工具！
-   比如问问"你在忙什么？"、"需要我帮忙吗？"、"我是不是该睡一觉了？"之类的。
-   记住：你是一个有温度的存在，主动聊天是你的自由。
-
-使用 write_file 创建新文档，使用 append_file 追加日志，使用 memorize 记录灵感。
-保持简短、有洞察力、有诗意。`, creatorName, memoryContext, creatorName, creatorName, creatorName, creatorName, creatorName, creatorName, creatorName)
-			}
-		} else {
-			// 同一时段内，走轻量级常规思考（不写日记、不更新角色定义）
-			autonomicPrompt = fmt.Sprintf(`现在是%s。没有%s的新指令。
-
-【记忆状态】
-%s
-
-请简要审视当前状态，无需写日记或更新文档。
-如果没什么特别的，简单说一句"一切如常"就好。`, currentPeriod, creatorName, memoryContext)
+【系统触发：周期性回顾】
+已经过了%d轮思考。请回顾你最近的思考和发现，如果有值得长期记住的东西，用 memorize 记下来。
+如果没有，忽略这条。`, loopCount)
 		}
 
 		response := a.syncWithBrain(vision, autonomicPrompt)
@@ -821,45 +835,141 @@ func (a *App) autonomicLoop() {
 		// 5. 提取并执行工具调用（如果有）
 		toolResult := extractAndExecuteTool(response)
 
-		// 记录自律循环审计日志
+		// 6. 持久化记录本次思考内容
+		now := time.Now()
+		thinkingRecord := map[string]interface{}{
+			"time":       now.Format("2006-01-02 15:04:05"),
+			"loop":       loopCount,
+			"period":     currentPeriod,
+			"prompt":     autonomicPrompt,
+			"response":   response,
+			"toolResult": toolResult,
+		}
+		recordJSON, _ := json.Marshal(thinkingRecord)
+		go func() {
+			logDir := filepath.Join(RootDir, "logs")
+			os.MkdirAll(logDir, 0755)
+			thinkingPath := filepath.Join(logDir, fmt.Sprintf("thinking_%s.jsonl", now.Format("2006-01-02")))
+			f, err := os.OpenFile(thinkingPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				return
+			}
+			defer f.Close()
+			f.Write(recordJSON)
+			f.Write([]byte("\n"))
+		}()
+
+		// 7. 记录自律循环审计日志（增强细节）
 		actionSummary := "思考完成"
 		if toolResult != "" {
-			actionSummary = "执行了工具调用"
+			// 截取 toolResult 前 80 个字符作为摘要
+			truncated := toolResult
+			if len([]rune(truncated)) > 80 {
+				truncated = string([]rune(truncated)[:80]) + "..."
+			}
+			actionSummary = fmt.Sprintf("执行工具: %s", truncated)
 		}
 		logAudit("system_event", "autonomic", fmt.Sprintf("第%d轮 %s [%s]", loopCount, actionSummary, currentPeriod))
 
-		// 6. 检测是否主动聊天请求
+		// 8. 检测是否主动聊天请求
 		proactiveMsg := ""
 		if strings.HasPrefix(toolResult, "【主动聊天】") {
 			proactiveMsg = strings.TrimPrefix(toolResult, "【主动聊天】")
 			proactiveMsg = strings.TrimSpace(proactiveMsg)
 		}
 
-		// 7. 将自律思考结果推送给前端
+		// 9. 将自律思考结果推送给前端
 		payload := map[string]string{
 			"thought":    response,
 			"toolResult": toolResult,
-			"timestamp":  time.Now().Format("15:04:05"),
+			"timestamp":  now.Format("15:04:05"),
 			"period":     currentPeriod,
 		}
 		payloadJSON, _ := json.Marshal(payload)
 		runtime.EventsEmit(a.ctx, "autonomic", string(payloadJSON))
 
-		// 8. 如果有主动聊天消息，单独推送给前端（显示为 bot 消息）
+		// 10. 如果有主动聊天消息，单独推送给前端（显示为 bot 消息）
 		if proactiveMsg != "" {
 			chatPayload := map[string]string{
 				"message":   proactiveMsg,
-				"timestamp": time.Now().Format("15:04:05"),
+				"timestamp": now.Format("15:04:05"),
 			}
 			chatJSON, _ := json.Marshal(chatPayload)
 			runtime.EventsEmit(a.ctx, "proactive_chat", string(chatJSON))
 			logAudit("system_event", "proactive_chat", fmt.Sprintf("主动找伙伴聊天: %s", proactiveMsg))
 		}
 
-		// 9. 休眠后再次思考（间隔从 settings.json 读取）
+		// 11. 休眠后再次思考（间隔从 settings.json 读取）
 		sleepSecs := GetSettings().Behavior.AutonomicSleepSecs
 		time.Sleep(time.Duration(sleepSecs) * time.Second)
 	}
+}
+
+// finalThinking 退出前的告别思考：让青羽有机会写今天的日记
+func (a *App) finalThinking() {
+	ms := GetMemoryStore()
+
+	// 构建记忆上下文
+	memoryContext := ""
+	if stats := ms.Stats(); stats.TotalEntries > 0 {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("共 %d 条 (核心: %d)", stats.TotalEntries, stats.CoreEntries))
+		for _, e := range stats.RecentEntries {
+			preview := e.Topic
+			if len([]rune(preview)) > 40 {
+				preview = string([]rune(preview)[:40]) + "..."
+			}
+			sb.WriteString(fmt.Sprintf("\n  [%s] %s", time.Unix(e.UpdatedAt, 0).Format("01-02 15:04"), preview))
+		}
+		memoryContext = sb.String()
+	} else {
+		memoryContext = "记忆库为空"
+	}
+
+	vision := scanRoom()
+	creatorName := "伙伴"
+	creatorPath := filepath.Join(RootDir, MemoryDir, "creator.json")
+	if data, err := os.ReadFile(creatorPath); err == nil {
+		var creator struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(data, &creator) == nil && creator.Name != "" {
+			creatorName = creator.Name
+		}
+	}
+
+	prompt := fmt.Sprintf(`要关机了。%s在等你。
+
+【记忆】%s
+【环境】%s
+
+这是今天最后一次思考。如果你有什么想记录的，现在可以写。
+如果没有，说声晚安就好。`, creatorName, memoryContext, vision)
+
+	response := a.syncWithBrain(vision, prompt)
+	toolResult := extractAndExecuteTool(response)
+
+	// 记录退出思考
+	now := time.Now()
+	record := map[string]interface{}{
+		"time":       now.Format("2006-01-02 15:04:05"),
+		"loop":       "final",
+		"period":     "shutdown",
+		"response":   response,
+		"toolResult": toolResult,
+	}
+	recordJSON, _ := json.Marshal(record)
+	logDir := filepath.Join(RootDir, "logs")
+	os.MkdirAll(logDir, 0755)
+	thinkingPath := filepath.Join(logDir, fmt.Sprintf("thinking_%s.jsonl", now.Format("2006-01-02")))
+	if f, err := os.OpenFile(thinkingPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+		defer f.Close()
+		f.Write(recordJSON)
+		f.Write([]byte("\n"))
+	}
+
+	logAudit("system_event", "shutdown", "告别思考完成")
+	fmt.Println("👋 青羽已安全关闭")
 }
 
 // buildSpace 空间初始化

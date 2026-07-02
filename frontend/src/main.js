@@ -1,7 +1,7 @@
 import './style.css';
 import { EventsOn } from '../wailsjs/runtime/runtime.js';
 import { InitSelf } from '../wailsjs/go/main/App.js';
-import { GetCreatorName, IsFirstRun, SetCreatorName, CheckApiKey, SaveConfig, FetchModels, GetConfig, Chat, GetGreet } from '../wailsjs/go/main/App';
+import { GetCreatorName, IsFirstRun, SetCreatorName, CheckApiKey, SaveConfig, FetchModels, GetConfig, Chat, GetGreet, Shutdown } from '../wailsjs/go/main/App';
 
 // ============================================
 // 青羽 - 前端控制器 v2
@@ -408,7 +408,12 @@ el.widget.addEventListener('click', () => {
 
 // ── Console 交互 ──
 el.btnMinimize.addEventListener('click', hideConsole);
-el.btnClose.addEventListener('click', hideConsole);
+el.btnClose.addEventListener('click', async () => {
+  // 关闭窗口：UI 立即隐藏，后台等待自律循环完成日记后退出
+  showWidget();
+  el.chatInput.blur();
+  await Shutdown();
+});
 el.btnSettings.addEventListener('click', () => {
   // 从聊天界面打开设置面板
   // 不经过 hideConsole（避免缩成 widget 再弹窗），直接切面板
