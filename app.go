@@ -1120,6 +1120,40 @@ func loadWorkspaceDocs() string {
 	return sb.String()
 }
 
+// normalizeBaseURL 规范化中转站地址，统一处理多种用户输入格式：
+//   - https://api.xxx.com/v1/chat/completions → https://api.xxx.com/v1
+//   - https://api.xxx.com/v1                  → https://api.xxx.com/v1
+//   - https://api.xxx.com                     → https://api.xxx.com/v1
+//   - https://api.xxx.com/                    → https://api.xxx.com/v1
+//   - https://api.xxx.com/v1/                 → https://api.xxx.com/v1
+//   - https://api.xxx.com/v1/chat/completions/ → https://api.xxx.com/v1
+func normalizeBaseURL(raw string) string {
+	// 1. 去掉尾部 /chat/completions（如果有）
+	raw = strings.TrimSuffix(raw, "/chat/completions")
+	raw = strings.TrimSuffix(raw, "/chat/completions/")
+
+	// 2. 去掉尾部 /
+	raw = strings.TrimRight(raw, "/")
+
+	// 3. 检查是否已包含 /v1 或 /v2 等版本路径
+	//    常见模式: /v1, /v2, /api, /v1/api 等
+	hasVersionPath := false
+	knownPrefixes := []string{"/v1", "/v2", "/v3", "/api"}
+	for _, prefix := range knownPrefixes {
+		if strings.HasSuffix(raw, prefix) {
+			hasVersionPath = true
+			break
+		}
+	}
+
+	// 4. 如果没有版本路径，追加 /v1（OpenAI 兼容标准）
+	if !hasVersionPath {
+		raw += "/v1"
+	}
+
+	return raw
+}
+
 // syncWithBrain 大脑同步（使用 App 实例的配置）
 func (a *App) syncWithBrain(visionContext, prompt string) string {
 	// 读取伙伴真名
@@ -1163,11 +1197,9 @@ func (a *App) syncWithBrain(visionContext, prompt string) string {
 
 	jsonData, _ := json.Marshal(payload)
 
-	// 确保 URL 以 /chat/completions 结尾（兼容用户只配了 base URL 如 https://api.xxx.com/v1 的情况）
-	apiURL := a.apiBaseURL
-	if !strings.HasSuffix(apiURL, "/chat/completions") {
-		apiURL = strings.TrimRight(apiURL, "/") + "/chat/completions"
-	}
+	// 统一规范化 base URL，再拼接 /chat/completions
+	baseURL := normalizeBaseURL(a.apiBaseURL)
+	apiURL := baseURL + "/chat/completions"
 
 	req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
@@ -1235,14 +1267,9 @@ func (a *App) FetchModels() string {
 		return "请先在设置中填写中转站地址"
 	}
 
-	// 从 baseURL 推导 models 端点
-	// 例如 https://api.xxx.com/v1/chat/completions → https://api.xxx.com/v1/models
-	modelsURL := a.apiBaseURL
-	if idx := strings.Index(modelsURL, "/chat/completions"); idx != -1 {
-		modelsURL = modelsURL[:idx] + "/models"
-	} else {
-		modelsURL = strings.TrimRight(modelsURL, "/") + "/models"
-	}
+	// 统一规范化 base URL，再拼接 /models
+	baseURL := normalizeBaseURL(a.apiBaseURL)
+	modelsURL := baseURL + "/models"
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, _ := http.NewRequest("GET", modelsURL, nil)
