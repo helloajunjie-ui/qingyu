@@ -67,15 +67,42 @@ func init() {
 					mood = globalApp.moodState
 				}
 
+				diaryMu.Lock()
+				path := filepath.Join(diaryDir, date+".json")
+
+				// 读取已有日记（如果存在），追加新内容而非覆盖
+				var existingContent string
+				var existingMood string
+				if data, err := os.ReadFile(path); err == nil {
+					var existing map[string]string
+					if json.Unmarshal(data, &existing) == nil {
+						existingContent = existing["content"]
+						existingMood = existing["mood"]
+					}
+				}
+
+				now := time.Now().Format("2006-01-02 15:04:05")
+				var finalContent string
+				if existingContent != "" {
+					// 已有日记：追加新段落，用时间戳分隔
+					finalContent = existingContent + "\n\n---\n[" + now + "]\n" + content
+					// 保留最早的情绪标签，除非显式指定了新 mood
+					if args["mood"] == "" {
+						mood = existingMood
+					}
+				} else {
+					finalContent = content
+				}
+
 				entry := map[string]string{
 					"date":    date,
 					"mood":    mood,
-					"content": content,
-					"created": time.Now().Format("2006-01-02 15:04:05"),
+					"content": finalContent,
+					"created": now,
 				}
 				data, _ := json.MarshalIndent(entry, "", "  ")
-				path := filepath.Join(diaryDir, date+".json")
 				os.WriteFile(path, data, 0644)
+				diaryMu.Unlock()
 
 				emoji := moodEmoji[mood]
 				if emoji == "" {
