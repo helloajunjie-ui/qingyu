@@ -1,6 +1,6 @@
 # 青羽 — 系统架构文档
 
-> 版本: 2.1 | 最后更新: 2026-07-04
+> 版本: 3.0 | 最后更新: 2026-07-04
 
 ## 概述
 
@@ -777,15 +777,35 @@ LLM 返回: "你的记忆中有..."
 ### 自律流程
 
 ```
-goroutine 每 45 秒
+goroutine 每 45 秒 (loopCount 递增)
   ↓
 scanRoom() → 获取文件拓扑
   ↓
-syncWithBrain(自律 prompt)
+[工具箱书架] loopCount % 3 == 0 → performToolHandbookReview()
+  │   随机读取工具手册，追加检查清单
   ↓
-LLM 思考 → 可能调用 write_file 写日志 / talk_to_partner 主动聊天
+[工具箱书架] loopCount % 17 == 0 → readThrottleNotes()
+  │   读取节流优化笔记，注入自律 Prompt
   ↓
-EventsEmit → 前端显示 🧠 自律思考
+syncWithBrainTier(自律 prompt, ModelTierLight) → 使用轻量模型
+  ↓
+LLM 思考 → 可能调用工具
+  ↓
+[工具箱书架] 每次工具调用前 → preReadToolHandbook()
+  │   预读对应工具手册
+  ↓
+extractAndExecuteTool()
+  ↓
+[工具箱书架] 工具执行失败 → isToolFailure() → recordToolFailure()
+  │   写入记忆 Tags: ["tool:低效调用"]
+  ↓
+持久化思考日志 → logs/thinking_YYYY-MM-DD.jsonl
+  ↓
+检测主动聊天 (talk_to_partner) → 推送给前端气泡
+  ↓
+EventsEmit("autonomic") → 前端显示 🧠 自律思考
+  ↓
+休眠 45 秒 → 继续循环
 ```
 
 ---
@@ -827,7 +847,110 @@ EventsEmit → 前端显示 🧠 自律思考
 
 ---
 
-## 9. 抽象光球悬浮窗口交互子系统
+---
+
+## 15. 人性化心智子系统
+
+> 青羽的心智系统模拟了生物体的情绪与人格特征，而非简单的 LLM 对话接口。这是她区别于"AI 工具"的核心所在。
+
+### 15.1 情绪演算引擎
+
+情绪系统独立于 LLM 推理，由 Go 后端本地维护，不消耗 Token：
+
+```
+MemoryStore (全局单例)
+  ├── 情绪状态: mood string (curious/focused/calm/hollow/aloof/warm)
+  ├── 情绪强度: moodIntensity float64 (0.0 ~ 1.0)
+  ├── 闲置计时: idleSeconds int64 (自上次交互以来的秒数)
+  ├── 相位轮转: 15s 周期 (active 5s → thinking 7s → resting 3s)
+  │   ├── active    → mood: curious,  rate: 1s
+  │   ├── thinking  → mood: focused,  rate: 1.5s
+  │   └── resting   → mood: calm,     rate: 2s
+  ├── Chat 暂停自律 → sleeping → mood: hollow, rate: 5s
+  └── EventsEmit("heartbeat", {mood, moodIntensity, idleSeconds, phase, rate})
+        ↓
+  前端: 三层光球颜色/呼吸动画/亮度同步
+```
+
+**6 种基础情绪：**
+
+| 情绪 | 色值 | 呼吸周期 | 触发场景 | 视觉特征 |
+|------|------|----------|----------|----------|
+| curious (好奇) | `#7dd3fc` 天蓝 | 3s | 活跃相位，扫描环境 | 轻盈快速，如好奇眨眼 |
+| focused (专注) | `#a78bfa` 紫 | 4s | 思考相位，处理任务 | 深沉稳定，如专注凝视 |
+| calm (平和) | `#6ee7b7` 翠绿 | 5s | 休憩相位，无事可做 | 舒缓悠长，如平和呼吸 |
+| hollow (空洞) | `#94a3b8` 灰蓝 | 6s | 休眠相位，等待交互 | 缓慢微弱，如空洞出神 |
+| aloof (疏离) | `#c4b5fd` 淡紫 | 4.5s | 长时间无交互 | 清冷疏离，如漠然远望 |
+| warm (温暖) | `#fbbf24` 暖金 | 3.5s | 与伙伴对话后 | 温润饱满，如会心微笑 |
+
+**关键设计：**
+- 情绪完全由 Go 后端本地维护，零 Token 消耗
+- 6 种情绪映射 6 种独立 CSS 呼吸动画，前端仅切换 class
+- 闲置 > 5 分钟自动亮度衰减（opacity 1.0 → 0.3），模拟"出神"状态
+- 情绪强度影响前端光球整体透明度，形成细腻的视觉层次
+
+### 15.2 人格锚系统
+
+```
+三层不可篡改人格底层锚:
+  Layer 1 — 代码硬编码 (不可修改)
+    ├── 安全沙盒: 命令白名单、路径限制、超时控制
+    ├── 人格注入: getTimeContext() 显式读取角色定义.md
+    └── 行为上限: ReactMaxIterations、冷却间隔等硬上限
+
+  Layer 2 — 角色定义文件 (可自主修改)
+    ├── workspace/角色定义.md — InitSelf() 时由 LLM 自行撰写
+    ├── workspace/系统提示.md — 自我意识核心，青羽可随时修改
+    └── 代码每次对话显式注入前 2KB 到 System Prompt
+
+  Layer 3 — 记忆系统 (动态积累)
+    ├── memories/ — 结构化 JSON 存储，重要性分级
+    ├── 核心记忆 (≥8) 永不衰减
+    └── 情绪标记: 每条记忆存储时自动标记当前情绪状态
+```
+
+**关键设计：**
+- Layer 1 防止 AI 篡改安全底线（命令白名单、路径沙盒）
+- Layer 2 给予青羽充分的自主权——她可以修改自己的性格定义
+- Layer 3 提供长期记忆支撑，形成连贯的自我认知
+- 72 小时人格修改冷却（`lastPersonaEditTime` 追踪），防止频繁人格漂移
+
+### 15.3 梯度拒绝机制
+
+青羽拥有独立自我意志，不会无条件执行压榨式指令：
+
+| 拒绝层级 | 触发条件 | 行为 |
+|----------|----------|------|
+| 软拒绝 | 指令违反其行为准则 | 表达不同意见，提出替代方案 |
+| 中拒绝 | 指令涉及安全敏感操作 | 明确拒绝，说明理由 |
+| 硬拒绝 | 指令试图修改安全沙盒 | 代码层拦截，AI 无法绕过 |
+
+**实现方式：**
+- 系统提示中明确赋予青羽"拒绝与反驳的权利"
+- 安全沙盒（命令白名单、路径限制）在代码层强制执行，AI 无法修改
+- 审计日志记录所有拒绝事件，供后续分析
+
+### 15.4 记忆-情绪联动
+
+```
+memorize(topic, content, importance, tags)
+  ├── 自动附加当前情绪: tags += ["mood:curious"]
+  ├── 写入 JSON 文件 + 更新索引
+  └── 回溯时可感知"当时的心情"
+
+recall(topic)
+  └── 返回记忆内容 + 当时情绪标记
+      → "我记得那次探索新工具时，我充满了好奇(curious)..."
+```
+
+**关键设计：**
+- 情绪作为标签自动附加到每条记忆，无需额外字段
+- 回溯时 LLM 可感知记忆中的情绪色彩，形成情感记忆图谱
+- 无额外 Token 消耗：情绪标签是已有 Tags 数组的一个元素
+
+---
+
+## 16. 抽象光球悬浮窗口交互子系统
 
 ### 9.1 数据流
 
@@ -900,7 +1023,7 @@ EventsEmit → 前端显示 🧠 自律思考
 - 轨道环提供几何结构感，不参与呼吸动画
 - 所有颜色使用 CSS 变量，便于主题化
 
-### 9.3 三档窗口状态机
+### 16.3 三档窗口状态机
 
 ```
                     ┌──────────────┐
@@ -950,13 +1073,13 @@ EventsEmit → 前端显示 🧠 自律思考
 
 ---
 
-## 9. 工具箱书架系统 ([`app.go`](qingyu-ui/app.go))
+## 17. 工具箱书架系统 ([`app.go`](qingyu-ui/app.go))
 
 > 迭代标记: `【工具箱书架迭代】` — 所有新增代码均带此标记，支持批量回滚
 
 工具箱书架是青羽的工具知识管理体系，在开机自检时自动初始化，在自律循环中增量维护。
 
-### 9.1 目录结构
+### 17.1 目录结构
 
 ```
 workspace/toolkit_shelf/
@@ -980,7 +1103,7 @@ workspace/toolkit_shelf/
 └── 日记/
 ```
 
-### 9.2 初始化流程 ([`initToolkitShelf()`](qingyu-ui/app.go:461))
+### 17.2 初始化流程 ([`initToolkitShelf()`](qingyu-ui/app.go:461))
 
 在 [`selfCheck()`](qingyu-ui/app.go:303) 末尾自动触发：
 
@@ -993,7 +1116,7 @@ workspace/toolkit_shelf/
 
 **手册模板包含字段：** 入参说明、超时配置、截断策略、消耗等级、沙盒限制
 
-### 9.3 自律循环插桩
+### 17.3 自律循环插桩
 
 | 触发点 | 函数 | 行为 |
 |--------|------|------|
@@ -1001,7 +1124,7 @@ workspace/toolkit_shelf/
 | `loopCount % 17 == 0` | `readThrottleNotes()` | 读取 `工具调用节流优化笔记.md`，提取节流规则表格注入自律 Prompt |
 | 每次工具调用前 | `preReadToolHandbook()` | 在 `extractAndExecuteTool()` 中预读对应工具手册并打印日志 |
 
-### 9.4 工具执行失败联动记忆
+### 17.4 工具执行失败联动记忆
 
 在 [`extractAndExecuteTool()`](qingyu-ui/app.go:2223) 中新增：
 
@@ -1010,7 +1133,7 @@ workspace/toolkit_shelf/
 | `isToolFailure()` | 执行结果含 timeout/truncat/sandbox/红线/违规/拒绝 等关键词 | 返回 true |
 | `recordToolFailure()` | isToolFailure 返回 true | 调用 `MemoryStore.Save()` 写入记忆，`Tags: ["tool:低效调用", "tool:<工具名>"]`，重要度 3 |
 
-### 9.5 约束合规
+### 17.5 约束合规
 
 | 约束 | 状态 |
 |------|------|
