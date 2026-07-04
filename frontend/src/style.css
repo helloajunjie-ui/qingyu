@@ -895,17 +895,51 @@ html, body {
   animation: msgIn 0.4s var(--ease-out-expo);
 }
 
-/* ===== 【抽象光球&贴边隐藏迭代】自律消息头像 — 纯几何圆 ===== */
+/* ===== 自律消息 — 可折叠 ===== */
 .message.autonomic .msg-avatar {
   background: rgba(100, 180, 255, 0.12);
-  /* 纯色几何圆，无文字/emoji */
+}
+
+.autonomic-summary {
+  font-size: 12px;
+  color: rgba(180, 200, 230, 0.55);
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  transition: color 0.2s;
+}
+
+.autonomic-summary:hover {
+  color: rgba(180, 200, 230, 0.8);
+}
+
+.autonomic-toggle {
+  font-size: 10px;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+  color: rgba(100, 180, 255, 0.4);
+  transition: transform 0.2s;
 }
 
 .autonomic-time {
   font-size: 11px;
-  color: rgba(100, 180, 255, 0.45);
-  margin-bottom: 4px;
-  letter-spacing: 0.5px;
+  color: rgba(100, 180, 255, 0.4);
+  flex-shrink: 0;
+}
+
+.autonomic-detail {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(100, 180, 255, 0.08);
+  animation: fadeIn 0.25s ease;
+}
+
+.autonomic-detail.hidden {
+  display: none;
 }
 
 .autonomic-thought {
@@ -920,6 +954,54 @@ html, body {
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px solid rgba(100, 200, 150, 0.12);
+}
+
+/* ===== 任务进度消息 ===== */
+.message.task-progress .msg-avatar {
+  background: rgba(255, 200, 100, 0.12);
+}
+
+.task-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 220, 150, 0.9);
+  margin-bottom: 8px;
+}
+
+.task-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.task-step {
+  font-size: 12px;
+  color: rgba(200, 210, 230, 0.6);
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  transition: all 0.3s;
+}
+
+.task-step.step-done {
+  color: rgba(100, 220, 150, 0.8);
+  background: rgba(100, 220, 150, 0.06);
+}
+
+.task-step.step-active {
+  color: rgba(255, 220, 100, 0.9);
+  background: rgba(255, 220, 100, 0.08);
+  animation: pulse-step 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-step {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; max-height: 0; }
+  to { opacity: 1; max-height: 500px; }
 }
 
 /* ── 系统消息 ── */

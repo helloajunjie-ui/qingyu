@@ -236,7 +236,7 @@ async function init() {
     }
   }, 1000);
 
-  // 自律事件
+  // 自律事件 — 可折叠展示，默认收起
   EventsOn('autonomic', (payload) => {
     try {
       const data = JSON.parse(payload);
@@ -278,6 +278,33 @@ async function init() {
         window._bubbleTimer = setTimeout(() => {
           bubble.classList.remove('show');
         }, 8000);
+      }
+    } catch (_) {}
+  });
+
+  // 任务进度事件 — 实时显示多步骤任务执行状态
+  EventsOn('task_progress', (payload) => {
+    try {
+      const data = JSON.parse(payload);
+      // 找到或更新已有的任务进度消息
+      let existing = document.querySelector('.message.task-progress:last-child');
+      if (!existing) {
+        addTaskProgress(data);
+      } else {
+        // 更新已有进度条的步骤状态
+        const stepsContainer = existing.querySelector('.task-steps');
+        if (stepsContainer && data.steps) {
+          stepsContainer.innerHTML = '';
+          data.steps.forEach((step, i) => {
+            const stepDiv = document.createElement('div');
+            stepDiv.className = 'task-step';
+            const done = step.done ? '✅' : (step.active ? '⏳' : '⬜');
+            stepDiv.textContent = `${done} ${step.label}`;
+            if (step.done) stepDiv.classList.add('step-done');
+            if (step.active) stepDiv.classList.add('step-active');
+            stepsContainer.appendChild(stepDiv);
+          });
+        }
       }
     } catch (_) {}
   });
@@ -827,36 +854,42 @@ function addProactiveChatMessage(data) {
   scrollToBottom();
 }
 
-// ===== 【抽象光球&贴边隐藏迭代】自律消息 — 去拟人化 + 情绪标签 =====
+// ===== 自律消息 — 可折叠，默认只显示摘要 =====
 function addAutonomicMessage(data) {
   const div = document.createElement('div');
-  div.className = 'message autonomic';
+  div.className = 'message autonomic collapsed';
 
   const avatar = document.createElement('div');
   avatar.className = 'msg-avatar';
-  // 去拟人化：纯色几何圆
 
   const content = document.createElement('div');
   content.className = 'msg-content';
 
-  const timeLabel = document.createElement('div');
-  timeLabel.className = 'autonomic-time';
-  // 绑定当前情绪 emoji
+  // 摘要行（始终可见）
+  const summary = document.createElement('div');
+  summary.className = 'autonomic-summary';
+
   const moodEmoji = moodEmojiMap[heartbeatState.mood] || '💫';
-  timeLabel.textContent = `⏺ ${data.timestamp} 自律思考`;
+  // 从思考内容提取第一句作为摘要
+  const firstLine = (data.thought || '').split('\n')[0] || '思考中...';
+  const truncated = firstLine.length > 40 ? firstLine.slice(0, 40) + '...' : firstLine;
+
+  summary.innerHTML = `<span class="autonomic-toggle">▶</span> ${moodEmoji} <span class="autonomic-time">${data.timestamp}</span> ${truncated}`;
+
+  // 详情区（默认隐藏）
+  const detail = document.createElement('div');
+  detail.className = 'autonomic-detail hidden';
 
   const thoughtText = document.createElement('div');
   thoughtText.className = 'autonomic-thought';
   thoughtText.innerHTML = formatMessage(data.thought);
-
-  content.appendChild(timeLabel);
-  content.appendChild(thoughtText);
+  detail.appendChild(thoughtText);
 
   if (data.toolResult) {
     const toolDiv = document.createElement('div');
     toolDiv.className = 'autonomic-tool';
     toolDiv.textContent = `🛠 ${data.toolResult}`;
-    content.appendChild(toolDiv);
+    detail.appendChild(toolDiv);
   }
 
   // 情绪标签
@@ -864,9 +897,63 @@ function addAutonomicMessage(data) {
     const moodTag = document.createElement('span');
     moodTag.className = 'diary-mood-tag';
     moodTag.textContent = `${moodEmojiMap[heartbeatState.mood]} ${moodNameMap[heartbeatState.mood] || heartbeatState.mood}`;
-    timeLabel.appendChild(moodTag);
+    summary.appendChild(moodTag);
   }
 
+  // 点击切换折叠
+  summary.addEventListener('click', () => {
+    div.classList.toggle('collapsed');
+    const toggle = summary.querySelector('.autonomic-toggle');
+    if (div.classList.contains('collapsed')) {
+      detail.classList.add('hidden');
+      toggle.textContent = '▶';
+    } else {
+      detail.classList.remove('hidden');
+      toggle.textContent = '▼';
+    }
+  });
+
+  content.appendChild(summary);
+  content.appendChild(detail);
+  div.appendChild(avatar);
+  div.appendChild(content);
+  el.consoleBody.appendChild(div);
+
+  scrollToBottom();
+}
+
+// ===== 任务进度消息 =====
+function addTaskProgress(data) {
+  const div = document.createElement('div');
+  div.className = 'message task-progress';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+
+  const content = document.createElement('div');
+  content.className = 'msg-content';
+
+  const header = document.createElement('div');
+  header.className = 'task-header';
+  header.textContent = `📋 ${data.task || '任务'}`;
+
+  const steps = document.createElement('div');
+  steps.className = 'task-steps';
+
+  if (data.steps && Array.isArray(data.steps)) {
+    data.steps.forEach((step, i) => {
+      const stepDiv = document.createElement('div');
+      stepDiv.className = 'task-step';
+      const done = step.done ? '✅' : (step.active ? '⏳' : '⬜');
+      stepDiv.textContent = `${done} ${step.label}`;
+      if (step.done) stepDiv.classList.add('step-done');
+      if (step.active) stepDiv.classList.add('step-active');
+      steps.appendChild(stepDiv);
+    });
+  }
+
+  content.appendChild(header);
+  content.appendChild(steps);
   div.appendChild(avatar);
   div.appendChild(content);
   el.consoleBody.appendChild(div);

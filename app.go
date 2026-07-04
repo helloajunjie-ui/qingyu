@@ -2328,6 +2328,29 @@ func (a *App) processAgentLoop(visionContext, userInput string) string {
 		}
 	}
 
+	// 任务进度追踪
+	taskSteps := []map[string]interface{}{}
+	stepIndex := 0
+
+	// 推送初始任务进度
+	pushTaskProgress := func(label string, done, active bool) {
+		step := map[string]interface{}{
+			"label":  label,
+			"done":   done,
+			"active": active,
+		}
+		if stepIndex < len(taskSteps) {
+			taskSteps[stepIndex] = step
+		} else {
+			taskSteps = append(taskSteps, step)
+		}
+		payload, _ := json.Marshal(map[string]interface{}{
+			"task":  userInput,
+			"steps": taskSteps,
+		})
+		runtime.EventsEmit(a.ctx, "task_progress", string(payload))
+	}
+
 	currentInput := userInput
 
 	for iteration := 0; iteration < maxIterations; iteration++ {
@@ -2349,6 +2372,17 @@ func (a *App) processAgentLoop(visionContext, userInput string) string {
 			return response
 		}
 
+		// 推送工具执行进度
+		stepIndex++
+		label := fmt.Sprintf("步骤 %d: 执行中...", stepIndex)
+		// 从 toolResult 提取简短摘要作为步骤名
+		if len(toolResult) > 40 {
+			label = fmt.Sprintf("步骤 %d: %s...", stepIndex, toolResult[:40])
+		} else if toolResult != "" {
+			label = fmt.Sprintf("步骤 %d: %s", stepIndex, toolResult)
+		}
+		pushTaskProgress(label, false, true)
+
 		// 有工具结果，继续下一轮迭代
 		if iteration < maxIterations-1 {
 			currentInput = fmt.Sprintf("%s之前的指令是: %s\n你使用了工具，获取到了以下数据:\n%s\n请根据这些数据回答%s。如果还需要使用其他工具，可以继续输出 JSON。", creatorName, userInput, toolResult, creatorName)
@@ -2359,6 +2393,16 @@ func (a *App) processAgentLoop(visionContext, userInput string) string {
 			if finalResponse == "" {
 				return "大脑无响应"
 			}
+			// 标记所有步骤完成
+			for i := range taskSteps {
+				taskSteps[i]["done"] = true
+				taskSteps[i]["active"] = false
+			}
+			payload, _ := json.Marshal(map[string]interface{}{
+				"task":  userInput,
+				"steps": taskSteps,
+			})
+			runtime.EventsEmit(a.ctx, "task_progress", string(payload))
 			return finalResponse
 		}
 	}
