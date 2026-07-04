@@ -1145,3 +1145,118 @@ workspace/toolkit_shelf/
 | 无新 syncWithBrain/syncWithBrainTier 调用 | ✅ |
 | 零额外 Token 消耗 | ✅ |
 | 不影响现有工具/情绪/人格逻辑 | ✅ |
+
+---
+
+## 18. 拓展网络 & 本地辅助工具子系统
+
+> **【拓展工具集迭代】** 在原有 60 工具基础上新增 17 个工具，覆盖全网自主探索、本地批量整理、系统交互增强三大方向，工具总数达到 **77 个**。
+
+### 18.1 新增工具总览
+
+| 分类 | 工具名 | 功能 | 算力等级 |
+|------|--------|------|----------|
+| 🌐 网络 | `web_multi_search` | 多引擎并发搜索（通用/新闻/学术），自动去重聚合 | 轻量 |
+| 🌐 网络 | `web_deep_extract` | 深度页面内容提取，移除 script/style，保留标题/元描述/正文 | 重量 |
+| 🌐 网络 | `web_link_parse` | URL 元数据解析（标题/描述/favicon/链接数） | 轻量 |
+| 🌐 网络 | `web_rss_read` | RSS 2.0 / Atom 订阅源解析，支持 max_items 控制 | 轻量 |
+| 🌐 网络 | `web_image_analysis` | 图片二进制头部分析（PNG/JPEG/GIF 尺寸检测） | 重量 |
+| 🌐 网络 | `web_file_download_safe` | 安全下载至 workspace/downloads/，Content-Length 校验 + io.LimitReader 防护 | 重量 |
+| 🌐 网络 | `web_archive_save` | 网页存档至 workspace/archives/，带 HTML 元数据头 | 重量 |
+| 💻 系统 | `system_desktop_snapshot` | 桌面快照（OS/架构/进程列表），detail 三级控制 | 轻量 |
+| 💻 系统 | `system_notify` | 系统通知弹窗，通过 Wails EventsEmit 推送到前端 + Browser Notification API | 重量 |
+| 💻 系统 | `system_shortcut_query` | 内置快捷键数据库查询（通用/窗口/编辑器分类） | 轻量 |
+| 💻 系统 | `system_volume_control` | 音量控制（get/set/mute/unmute/toggle），PowerShell 实现 | 重量 |
+| 💻 系统 | `system_tray_tip` | 托盘气泡提示，通过 Wails EventsEmit 推送 | 重量 |
+| 📁 文件 | `file_batch_scan` | 批量目录扫描，支持 ext/size/time/depth 过滤 + 排序 | 轻量 |
+| 📁 文件 | `file_md_merge` | Markdown 文件合并，可选自动生成目录 | 轻量 |
+| 📁 文件 | `file_media_meta` | 媒体文件元数据提取（图片尺寸/音视频大小/PDF 版本） | 轻量 |
+| 📔 日记 | `schedule_shared_plan` | 双向计划管理（CRUD + list + sync），同步至 workspace/共享计划.md | 轻量 |
+| 📄 实用 | `office_table_quick_parse` | 轻量化表格解析，自动检测分隔符（逗号/制表符/空格），支持引号转义 | 轻量 |
+
+### 18.2 分层模型算力分级规则
+
+通过 [`settings.go`](qingyu-ui/settings.go) 中 `ModelsConfig.ToolComputeTier` 配置，将 17 个新工具分为 **轻量级（10 个）** 和 **重量级（7 个）**：
+
+| 等级 | 调度模型 | 适用场景 | 工具列表 |
+|------|----------|----------|----------|
+| **轻量** | `light`（轻量模型，如 qwen-turbo） | 结构化查询、元数据提取、本地文件扫描 | `web_multi_search`, `web_link_parse`, `web_rss_read`, `system_desktop_snapshot`, `system_shortcut_query`, `file_batch_scan`, `file_media_meta`, `file_md_merge`, `office_table_quick_parse`, `schedule_shared_plan` |
+| **重量** | `main`（主模型，如 qwen-max） | 内容提取、文件下载、UI 交互推送 | `web_deep_extract`, `web_image_analysis`, `web_file_download_safe`, `web_archive_save`, `system_notify`, `system_volume_control`, `system_tray_tip` |
+
+**分级策略：** 轻量工具仅需结构化输出或本地只读查询，使用轻量模型可大幅降低 Token 消耗；重量工具涉及网络内容提取、文件 IO 或 UI 交互，需主模型保障结果质量。
+
+### 18.3 缓存、沙盒与失败记忆复盘联动数据流
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    工具调用入口                                │
+│              extractAndExecuteTool()                         │
+└──────────────────┬──────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│              ① 缓存层（仅网络工具）                            │
+│  CachedNetworkCall(prefix, key, fetchFn)                     │
+│  ┌─────────────────────────────────────┐                    │
+│  │ 内存缓存（sync.Map）→ 磁盘缓存（SHA256）│ ← TTL 独立配置    │
+│  │ web_multi_search: 300s              │                    │
+│  │ web_deep_extract: 600s              │                    │
+│  │ web_link_parse:    600s             │                    │
+│  │ web_rss_read:      300s             │                    │
+│  │ web_image_analysis:600s             │                    │
+│  │ web_file_download_safe/web_archive_save: 无缓存           │
+│  └─────────────────────────────────────┘                    │
+└──────────────────┬──────────────────────────────────────────┘
+                   │ 缓存未命中 / 无缓存工具
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│              ② 沙盒层（仅本地文件工具）                         │
+│  ┌─────────────────────────────────────┐                    │
+│  │ file_batch_scan → 仅限 workspace/   │                    │
+│  │ file_md_merge   → 仅限 workspace/   │                    │
+│  │ file_media_meta → 仅限 workspace/   │                    │
+│  │ web_file_download_safe → workspace/downloads/             │
+│  │ web_archive_save      → workspace/archives/               │
+│  └─────────────────────────────────────┘                    │
+└──────────────────┬──────────────────────────────────────────┘
+                   │ 沙盒校验通过
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│              ③ 执行层                                        │
+│  网络工具：HTTP 请求 + 正则/XML 解析                          │
+│  系统工具：PowerShell / Wails EventsEmit                     │
+│  文件工具：os 标准库操作                                      │
+└──────────────────┬──────────────────────────────────────────┘
+                   │ 执行完成 / 执行失败
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│              ④ 失败记忆复盘联动                                │
+│  isToolFailure() → recordToolFailure()                      │
+│  ┌─────────────────────────────────────┐                    │
+│  │ 检测关键词：timeout/truncat/sandbox/ │                    │
+│  │ 红线/违规/拒绝/下载失败/解析失败      │                    │
+│  │ 写入记忆：Tags: ["tool:低效调用",     │                    │
+│  │  "tool:<工具名>"], 重要度 3           │                    │
+│  └─────────────────────────────────────┘                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**关键设计说明：**
+- **缓存层**仅对网络工具生效，本地文件工具和系统工具不缓存（数据实时性要求高）
+- **沙盒层**复用现有 `workspace/` 路径校验逻辑，下载/存档工具自动创建子目录
+- **失败记忆复盘**复用 [`app.go`](qingyu-ui/app.go:2233) 中 `extractAndExecuteTool()` 的 `isToolFailure` / `recordToolFailure` 机制，无需新增代码
+
+### 18.4 工具箱书架自动同步逻辑
+
+新增 17 个工具**无需修改** [`app.go`](qingyu-ui/app.go) 中的 [`selfCheck()`](qingyu-ui/app.go:303) 或 [`initToolkitShelf()`](qingyu-ui/app.go:461)：
+
+| 步骤 | 自动行为 | 说明 |
+|------|----------|------|
+| 1 | `Toolkit` 注册 | 新增工具通过各自文件中的 `func init()` 自动注册到全局 `Toolkit` map |
+| 2 | `selfCheck()` 触发 | 启动时调用 `initToolkitShelf()`，遍历 `Toolkit` map |
+| 3 | `generateAllToolHandbooks()` | 为每个新增工具在对应分类子文件夹下生成基础手册模板 |
+| 4 | `updateToolMasterIndex()` | 扫描所有工具手册，更新 `全工具目录总览.md` 索引清单 |
+| 5 | 自律循环 %3 插桩 | `performToolHandbookReview()` 随机翻阅新增工具手册，无需修改循环逻辑 |
+| 6 | 调用前预读 | `extractAndExecuteTool()` 中的 `preReadToolHandbook()` 自动覆盖新增工具 |
+
+**约束合规：** 所有新增代码统一标记 `【拓展工具集迭代】`，支持全局批量注释回滚。零新增 `syncWithBrain` / `syncWithBrainTier` 高频调用。

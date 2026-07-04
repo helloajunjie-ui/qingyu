@@ -310,6 +310,45 @@ async function init() {
     } catch (_) {}
   });
 
+  // ===== 【拓展工具集迭代】系统通知事件 — 接收后端推送的系统通知 =====
+  EventsOn('system_notify', (payload) => {
+    try {
+      const data = JSON.parse(payload);
+      // 如果控制台已打开，在聊天区显示通知
+      if (!el.console.classList.contains('hidden')) {
+        const msg = document.createElement('div');
+        msg.className = 'message system';
+        msg.innerHTML = `<span style="opacity:0.5">🔔 ${data.title || '系统通知'}</span><br>${data.message || ''}`;
+        el.consoleBody.appendChild(msg);
+        scrollToBottom();
+      }
+      // 浏览器原生通知（如果已授权）
+      if (Notification && Notification.permission === 'granted') {
+        new Notification(data.title || '青羽', { body: data.message || '' });
+      }
+    } catch (_) {}
+  });
+
+  // ===== 【拓展工具集迭代】托盘提示事件 — 接收后端推送的托盘气泡 =====
+  EventsOn('tray_tip', (payload) => {
+    try {
+      const data = JSON.parse(payload);
+      // 在 widget 气泡区域显示简短提示
+      if (data.message) {
+        const bubble = el.widgetBubble;
+        const bubbleText = el.widgetBubbleText;
+        const iconMap = { info: 'ℹ️', warning: '⚠️', error: '❌' };
+        bubbleText.textContent = `${iconMap[data.icon] || 'ℹ️'} ${data.message}`;
+        bubble.classList.add('show');
+
+        clearTimeout(window._trayTimer);
+        window._trayTimer = setTimeout(() => {
+          bubble.classList.remove('show');
+        }, 5000);
+      }
+    } catch (_) {}
+  });
+
   // ===== 【抽象光球&贴边隐藏迭代】边缘吸附逻辑 =====
   // 闲置自动贴边定时器
   idleDockTimer = setInterval(() => {
@@ -747,6 +786,7 @@ function scrollToBottom() {
 }
 
 // ===== 【抽象光球&贴边隐藏迭代】proactive_chat 消息 — 去拟人化 =====
+// ===== 【拓展工具集迭代】新增「网络检索/本地整理」source 溯源标签 =====
 function addProactiveChatMessage(data) {
   const div = document.createElement('div');
   div.className = 'message proactive_chat';
@@ -758,11 +798,20 @@ function addProactiveChatMessage(data) {
   const content = document.createElement('div');
   content.className = 'msg-content';
 
-  // source 标签
+  // source 标签 — 支持「网络检索」「本地整理」「主动」三类来源
   const sourceDiv = document.createElement('div');
   sourceDiv.className = 'proactive-source';
   const source = data.source || '主动';
-  sourceDiv.innerHTML = `💭 ${source} <span class="source-tag">主动</span>`;
+  let sourceIcon = '💭';
+  let sourceClass = 'source-tag-active';
+  if (source === '网络检索') {
+    sourceIcon = '🌐';
+    sourceClass = 'source-tag-web';
+  } else if (source === '本地整理') {
+    sourceIcon = '📁';
+    sourceClass = 'source-tag-local';
+  }
+  sourceDiv.innerHTML = `${sourceIcon} ${source} <span class="${sourceClass}">${source}</span>`;
 
   const msgText = document.createElement('div');
   msgText.innerHTML = formatMessage(data.message);

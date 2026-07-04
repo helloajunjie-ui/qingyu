@@ -147,6 +147,200 @@ func init() {
 						}
 						results = append(results, fmt.Sprintf("📔 %s [%s]: %s", dateName, entry["mood"], contentPreview))
 					}
+
+					// ===== 【拓展工具集迭代】schedule_shared_plan — 双向计划同步 =====
+					Toolkit["schedule_shared_plan"] = Tool{
+						Name:        "schedule_shared_plan",
+						Description: "【本地整理】双向计划管理：记录/查询/同步你和青羽的共同计划。参数: action (create/query/update/delete/list/sync), title (计划标题), content (计划内容), deadline (截止日期 YYYY-MM-DD), status (状态: pending/in_progress/done/cancelled), tag (分类标签), id (计划ID, update/delete时必填)",
+						Category:    "日记",
+						Execute: func(args map[string]string) string {
+							planDir := filepath.Join(RootDir, "memories", "plans")
+							os.MkdirAll(planDir, 0755)
+							indexPath := filepath.Join(planDir, "index.json")
+
+							action := args["action"]
+							if action == "" {
+								action = "list"
+							}
+
+							// 加载现有计划
+							type Plan struct {
+								ID        string `json:"id"`
+								Title     string `json:"title"`
+								Content   string `json:"content"`
+								Deadline  string `json:"deadline"`
+								Status    string `json:"status"`
+								Tag       string `json:"tag"`
+								CreatedAt string `json:"created_at"`
+								UpdatedAt string `json:"updated_at"`
+							}
+							var plans []Plan
+							if data, err := os.ReadFile(indexPath); err == nil {
+								json.Unmarshal(data, &plans)
+							}
+
+							switch action {
+							case "create":
+								title := args["title"]
+								if title == "" {
+									return "❌ 请提供计划标题"
+								}
+								content := args["content"]
+								deadline := args["deadline"]
+								status := args["status"]
+								if status == "" {
+									status = "pending"
+								}
+								tag := args["tag"]
+								now := time.Now().Format("2006-01-02 15:04:05")
+								id := fmt.Sprintf("plan_%x", time.Now().UnixNano())
+
+								plan := Plan{
+									ID:        id,
+									Title:     title,
+									Content:   content,
+									Deadline:  deadline,
+									Status:    status,
+									Tag:       tag,
+									CreatedAt: now,
+									UpdatedAt: now,
+								}
+								plans = append(plans, plan)
+								data, _ := json.MarshalIndent(plans, "", "  ")
+								os.WriteFile(indexPath, data, 0644)
+
+								return fmt.Sprintf("✅ 计划已创建: %s\n  ID: %s\n  截止: %s\n  状态: %s", title, id, deadline, status)
+
+							case "query":
+								id := args["id"]
+								if id == "" {
+									return "❌ 请提供计划ID"
+								}
+								for _, p := range plans {
+									if p.ID == id {
+										return fmt.Sprintf("📋 计划详情:\n  标题: %s\n  内容: %s\n  截止: %s\n  状态: %s\n  标签: %s\n  创建: %s\n  更新: %s",
+											p.Title, p.Content, p.Deadline, p.Status, p.Tag, p.CreatedAt, p.UpdatedAt)
+									}
+								}
+								return fmt.Sprintf("❌ 未找到计划: %s", id)
+
+							case "update":
+								id := args["id"]
+								if id == "" {
+									return "❌ 请提供计划ID"
+								}
+								found := false
+								for i, p := range plans {
+									if p.ID == id {
+										if title := args["title"]; title != "" {
+											plans[i].Title = title
+										}
+										if content := args["content"]; content != "" {
+											plans[i].Content = content
+										}
+										if deadline := args["deadline"]; deadline != "" {
+											plans[i].Deadline = deadline
+										}
+										if status := args["status"]; status != "" {
+											plans[i].Status = status
+										}
+										if tag := args["tag"]; tag != "" {
+											plans[i].Tag = tag
+										}
+										plans[i].UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
+										found = true
+										break
+									}
+								}
+								if !found {
+									return fmt.Sprintf("❌ 未找到计划: %s", id)
+								}
+								data, _ := json.MarshalIndent(plans, "", "  ")
+								os.WriteFile(indexPath, data, 0644)
+								return fmt.Sprintf("✅ 计划已更新: %s", id)
+
+							case "delete":
+								id := args["id"]
+								if id == "" {
+									return "❌ 请提供计划ID"
+								}
+								var newPlans []Plan
+								found := false
+								for _, p := range plans {
+									if p.ID == id {
+										found = true
+										continue
+									}
+									newPlans = append(newPlans, p)
+								}
+								if !found {
+									return fmt.Sprintf("❌ 未找到计划: %s", id)
+								}
+								data, _ := json.MarshalIndent(newPlans, "", "  ")
+								os.WriteFile(indexPath, data, 0644)
+								return fmt.Sprintf("🗑 计划已删除: %s", id)
+
+							case "list":
+								if len(plans) == 0 {
+									return "📋 暂无计划"
+								}
+								tag := args["tag"]
+								status := args["status"]
+								var sb strings.Builder
+								sb.WriteString(fmt.Sprintf("📋 共同计划 (%d 个):\n", len(plans)))
+								for _, p := range plans {
+									if tag != "" && p.Tag != tag {
+										continue
+									}
+									if status != "" && p.Status != status {
+										continue
+									}
+									statusEmoji := map[string]string{
+										"pending":     "⏳",
+										"in_progress": "🔄",
+										"done":        "✅",
+										"cancelled":   "❌",
+									}
+									emoji := statusEmoji[p.Status]
+									if emoji == "" {
+										emoji = "📌"
+									}
+									titlePreview := p.Title
+									if len([]rune(titlePreview)) > 30 {
+										titlePreview = string([]rune(titlePreview)[:30]) + "..."
+									}
+									sb.WriteString(fmt.Sprintf("  %s [%s] %s (截止: %s)\n", emoji, p.ID[:12], titlePreview, p.Deadline))
+								}
+								return sb.String()
+
+							case "sync":
+								// 同步：将计划写入 workspace 共享文件
+								syncPath := filepath.Join(RootDir, WorkspaceDir, "共享计划.md")
+								var sb strings.Builder
+								sb.WriteString("# 📋 青羽与伙伴的共同计划\n\n")
+								sb.WriteString(fmt.Sprintf("> 同步时间: %s\n\n", time.Now().Format("2006-01-02 15:04:05")))
+								if len(plans) == 0 {
+									sb.WriteString("暂无计划。\n")
+								} else {
+									for _, p := range plans {
+										sb.WriteString(fmt.Sprintf("## %s\n", p.Title))
+										sb.WriteString(fmt.Sprintf("- **状态**: %s\n", p.Status))
+										sb.WriteString(fmt.Sprintf("- **截止**: %s\n", p.Deadline))
+										sb.WriteString(fmt.Sprintf("- **标签**: %s\n", p.Tag))
+										if p.Content != "" {
+											sb.WriteString(fmt.Sprintf("- **内容**: %s\n", p.Content))
+										}
+										sb.WriteString("\n")
+									}
+								}
+								os.WriteFile(syncPath, []byte(sb.String()), 0644)
+								return fmt.Sprintf("✅ 计划已同步到: %s (%d 个计划)", syncPath, len(plans))
+
+							default:
+								return "❌ 未知操作，可选: create, query, update, delete, list, sync"
+							}
+						},
+					}
 				}
 				if len(results) == 0 {
 					return fmt.Sprintf("没有找到包含「%s」的日记", keyword)

@@ -1019,3 +1019,140 @@ func xmlEscape(s string) string {
 	).Replace(s)
 	return s
 }
+
+// ===== 【拓展工具集迭代】office_table_quick_parse — 轻量化表格解析 =====
+func init() {
+	Toolkit["office_table_quick_parse"] = Tool{
+		Name:        "office_table_quick_parse",
+		Description: "【本地整理】快速解析表格文件（CSV/TSV/简单表格文本），返回结构化数据。参数: path (文件路径), delimiter (分隔符: comma/tab/space/auto,默认auto), has_header (是否有表头: true/false,默认true), max_rows (最大行数,默认50)",
+		Category:    "实用",
+		Execute: func(args map[string]string) string {
+			path := args["path"]
+			if path == "" {
+				return "❌ 请提供文件路径"
+			}
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(RootDir, path)
+			}
+
+			delimiter := args["delimiter"]
+			if delimiter == "" {
+				delimiter = "auto"
+			}
+			hasHeader := args["has_header"] != "false"
+			maxRows := 50
+			if n := args["max_rows"]; n != "" {
+				fmt.Sscanf(n, "%d", &maxRows)
+			}
+			if maxRows < 1 || maxRows > 200 {
+				maxRows = 50
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Sprintf("❌ 读取文件失败: %v", err)
+			}
+
+			content := string(data)
+			lines := strings.Split(strings.TrimSpace(content), "\n")
+			if len(lines) == 0 {
+				return "❌ 文件为空"
+			}
+
+			// 自动检测分隔符
+			detectDelim := func(line string) string {
+				commas := strings.Count(line, ",")
+				tabs := strings.Count(line, "\t")
+				spaces := strings.Count(line, " ")
+				if commas >= tabs && commas >= spaces && commas > 0 {
+					return ","
+				}
+				if tabs >= commas && tabs >= spaces && tabs > 0 {
+					return "\t"
+				}
+				if spaces >= commas && spaces >= tabs && spaces > 0 {
+					return " "
+				}
+				return ","
+			}
+
+			sep := delimiter
+			switch delimiter {
+			case "comma":
+				sep = ","
+			case "tab":
+				sep = "\t"
+			case "space":
+				sep = " "
+			case "auto":
+				sep = detectDelim(lines[0])
+			}
+
+			// 解析
+			parseLine := func(line string) []string {
+				var fields []string
+				if sep == "," {
+					// 简单 CSV 解析（支持引号）
+					inQuote := false
+					current := strings.Builder{}
+					for _, ch := range line {
+						switch {
+						case ch == '"':
+							inQuote = !inQuote
+						case ch == ',' && !inQuote:
+							fields = append(fields, strings.TrimSpace(current.String()))
+							current.Reset()
+						default:
+							current.WriteRune(ch)
+						}
+					}
+					fields = append(fields, strings.TrimSpace(current.String()))
+				} else {
+					fields = strings.Split(line, sep)
+					for i := range fields {
+						fields[i] = strings.TrimSpace(fields[i])
+					}
+				}
+				return fields
+			}
+
+			startRow := 0
+			var headers []string
+			if hasHeader && len(lines) > 0 {
+				headers = parseLine(lines[0])
+				startRow = 1
+			}
+
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("📊 表格解析: %s\n", path))
+			sb.WriteString(fmt.Sprintf("  分隔符: %s\n", sep))
+			sb.WriteString(fmt.Sprintf("  总行数: %d\n", len(lines)))
+			if hasHeader && len(headers) > 0 {
+				sb.WriteString(fmt.Sprintf("  列数: %d\n", len(headers)))
+				sb.WriteString(fmt.Sprintf("  表头: %s\n", strings.Join(headers, " | ")))
+			}
+
+			// 显示数据行
+			displayRows := maxRows
+			if len(lines)-startRow < displayRows {
+				displayRows = len(lines) - startRow
+			}
+			if displayRows > 0 {
+				sb.WriteString("  数据:\n")
+				for i := 0; i < displayRows; i++ {
+					fields := parseLine(lines[startRow+i])
+					rowStr := strings.Join(fields, " | ")
+					if len([]rune(rowStr)) > 200 {
+						rowStr = string([]rune(rowStr)[:200]) + "..."
+					}
+					sb.WriteString(fmt.Sprintf("  [%d] %s\n", i+1, rowStr))
+				}
+				if len(lines)-startRow > displayRows {
+					sb.WriteString(fmt.Sprintf("  ... 还有 %d 行\n", len(lines)-startRow-displayRows))
+				}
+			}
+
+			return sb.String()
+		},
+	}
+}

@@ -63,6 +63,10 @@ type BehaviorConfig struct {
 	ProactiveMoodThreshold   int `json:"proactive_mood_threshold"`    // 情绪阈值，仅低于此值才发起主动聊天
 	// 摘要压缩
 	SummarizeInterval int `json:"summarize_interval"` // 每 N 轮自律循环做一次摘要压缩
+	// ===== 【拓展工具集迭代】网络工具全局限制参数 =====
+	WebMaxFetchChars           int `json:"web_max_fetch_chars"`            // 网络抓取最大字符数，默认 10000
+	WebDownloadMaxSize         int `json:"web_download_max_size"`          // 文件下载最大字节数，默认 50MB (52428800)
+	WebProactiveSearchCoolDown int `json:"web_proactive_search_cool_down"` // 主动搜索冷却时间（秒），默认 60
 }
 
 type PathsConfig struct {
@@ -87,6 +91,10 @@ type WindowConfig struct {
 type ModelsConfig struct {
 	LightModel   string `json:"light_model"`    // 轻量模型名（如 deepseek-chat, gpt-4o-mini）
 	LightBaseURL string `json:"light_base_url"` // 轻量模型中转站地址（可选，默认同主模型）
+	// ===== 【拓展工具集迭代】工具算力分级映射表 =====
+	// key: 工具名, value: "light" 或 "heavy"
+	// light = 使用轻量模型处理，heavy = 使用主模型处理
+	ToolComputeTier map[string]string `json:"tool_compute_tier"`
 }
 
 // 全局单例
@@ -134,13 +142,16 @@ func defaultSettings() *Settings {
 			NetworkFetch: 15,
 		},
 		Behavior: BehaviorConfig{
-			AutonomicSleepSecs:       45,
-			ReactMaxIterations:       3,
-			HeartbeatStartDelay:      3,
-			AutonomicCheckInterval:   3,
-			ProactiveChatMinInterval: 300, // 5 分钟
-			ProactiveMoodThreshold:   3,   // 情绪值 <= 3 才发起主动聊天
-			SummarizeInterval:        5,   // 每 5 轮摘要一次
+			AutonomicSleepSecs:         45,
+			ReactMaxIterations:         3,
+			HeartbeatStartDelay:        3,
+			AutonomicCheckInterval:     3,
+			ProactiveChatMinInterval:   300,      // 5 分钟
+			ProactiveMoodThreshold:     3,        // 情绪值 <= 3 才发起主动聊天
+			SummarizeInterval:          5,        // 每 5 轮摘要一次
+			WebMaxFetchChars:           10000,    // 默认 10000 字符
+			WebDownloadMaxSize:         52428800, // 默认 50MB
+			WebProactiveSearchCoolDown: 60,       // 默认 60 秒
 		},
 		Paths: PathsConfig{
 			ConfigFile:   "dna/config.json",
@@ -155,6 +166,27 @@ func defaultSettings() *Settings {
 		Models: ModelsConfig{
 			LightModel:   "", // 默认空，回退到主模型
 			LightBaseURL: "",
+			ToolComputeTier: map[string]string{
+				// 低复杂度工具 → 轻量模型
+				"web_multi_search":         "light",
+				"web_link_parse":           "light",
+				"web_rss_read":             "light",
+				"system_desktop_snapshot":  "light",
+				"system_shortcut_query":    "light",
+				"file_batch_scan":          "light",
+				"file_media_meta":          "light",
+				"file_md_merge":            "light",
+				"office_table_quick_parse": "light",
+				"schedule_shared_plan":     "light",
+				// 高复杂度工具 → 主模型
+				"web_deep_extract":       "heavy",
+				"web_image_analysis":     "heavy",
+				"web_file_download_safe": "heavy",
+				"web_archive_save":       "heavy",
+				"system_notify":          "heavy",
+				"system_volume_control":  "heavy",
+				"system_tray_tip":        "heavy",
+			},
 		},
 		Window: WindowConfig{
 			Title:       "青羽",

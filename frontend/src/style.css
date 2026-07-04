@@ -1298,3 +1298,37 @@ html, body {
   0%, 100% { opacity: 0.13; transform: scale(1); }
   50%      { opacity: 0.3; transform: scale(1.03); }
 }
+
+/* ===== 【拓展工具集迭代】source 溯源标签 — 网络检索 / 本地整理 ===== */
+.source-tag-web {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0, 200, 255, 0.12);
+  color: rgba(0, 200, 255, 0.85);
+  font-size: 9px;
+  margin-left: 4px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.source-tag-local {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(100, 255, 150, 0.10);
+  color: rgba(100, 255, 150, 0.80);
+  font-size: 9px;
+  margin-left: 4px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.source-tag-active {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(100, 200, 255, 0.08);
+  font-size: 9px;
+  margin-left: 4px;
+}
