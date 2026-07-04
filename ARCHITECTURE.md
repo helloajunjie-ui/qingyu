@@ -803,3 +803,126 @@ EventsEmit → 前端显示 🧠 自律思考
 | 事件系统 | Wails Events (runtime.EventsEmit) |
 | 加密 | AES-256-CBC + crypto/rand |
 | 构建工具 | Wails CLI + MinGW-W64 |
+
+---
+
+## 9. 抽象光球悬浮窗口交互子系统
+
+### 9.1 数据流
+
+```
+后端 heartbeatLoop() (goroutine, 1s ticker)
+  │
+  ├── 动态心率: active(1s) / thinking(1.5s) / resting(2s) / sleeping(5s)
+  ├── 相位轮转: 15s 周期 (active 5s → thinking 7s → resting 3s)
+  │
+  └── EventsEmit("heartbeat", {
+        mood:         "curious" | "focused" | "calm" | "hollow" | "aloof" | "warm",
+        moodIntensity: 0.0 ~ 1.0,    // 情绪强度
+        idleSeconds:   0 ~ ∞,         // 闲置秒数
+        phase:        "active" | "thinking" | "resting" | "sleeping",
+        rate:         1000 | 1500 | 2000 | 5000
+      })
+        │
+        ▼
+前端 updateHeartbeatUI(state)
+  ├── widget-core (10px 内核光点) → mood 色 + box-shadow 辉光
+  ├── widget-orbit (44px 轨道环)  → mood 色 border
+  ├── widget-glow (80px 外辉光)   → mood 色径向渐变 + 对应 breathe 动画
+  ├── moodIntensity → 整体 opacity (0.3 ~ 1.0)
+  └── idleSeconds > 300 → 全局亮度线性衰减 (opacity 1.0 → 0.3)
+```
+
+**关键设计：**
+- 零后端修改：前端仅消费已有 `heartbeat` 事件字段，不新增任何 Go 绑定或事件
+- 纯 CSS 动画驱动：6 种情绪各自对应独立 `@keyframes glow-{mood}`，JS 只切换 class，不参与帧循环
+- 闲置衰减纯前端计算：`idleSeconds` 来自后端，前端线性插值控制 opacity，不新增 goroutine
+
+### 9.2 三层抽象光球结构
+
+```
+┌─────────────────────────────────┐
+│  widget-glow (80×80px)          │  ← 最外层：情绪呼吸光晕
+│  background: radial-gradient(    │     6 种情绪色映射
+│    circle at 50% 50%,           │     CSS @keyframes 呼吸动画
+│    {moodColor} 0%, transparent  │     闲置时亮度衰减
+│    70%)                         │
+│  animation: glow-{mood} {t}s    │
+│    ease-in-out infinite          │
+├─────────────────────────────────┤
+│  widget-orbit (44×44px)         │  ← 中层：几何轨道环
+│  border: 2px solid {moodColor}  │     纯圆形边框，无填充
+│  border-radius: 50%             │     情绪色同步
+│  opacity: 0.6                   │     提供结构感
+├─────────────────────────────────┤
+│  widget-core (10×10px)          │  ← 内层：固定内核光点
+│  background: {moodColor}        │     始终居中，不旋转
+│  box-shadow: 0 0 12px {color}   │     情绪色辉光
+│  opacity: moodIntensity          │     闲置衰减直接控制
+└─────────────────────────────────┘
+```
+
+**情绪色映射表：**
+
+| mood | 色值 | 呼吸周期 | 视觉特征 |
+|------|------|----------|----------|
+| curious | `#7dd3fc` (天蓝) | 3s | 轻盈快速，如好奇眨眼 |
+| focused | `#a78bfa` (紫) | 4s | 深沉稳定，如专注凝视 |
+| calm | `#6ee7b7` (翠绿) | 5s | 舒缓悠长，如平和呼吸 |
+| hollow | `#94a3b8` (灰蓝) | 6s | 缓慢微弱，如空洞出神 |
+| aloof | `#c4b5fd` (淡紫) | 4.5s | 清冷疏离，如漠然远望 |
+| warm | `#fbbf24` (暖金) | 3.5s | 温润饱满，如会心微笑 |
+
+**设计规范：**
+- 无任何具象图案、人脸、五官、文字、emoji
+- 内核光点始终固定（不旋转、不位移），呼吸感仅由外层辉光 opacity 动画实现
+- 轨道环提供几何结构感，不参与呼吸动画
+- 所有颜色使用 CSS 变量，便于主题化
+
+### 9.3 三档窗口状态机
+
+```
+                    ┌──────────────┐
+                    │   normal     │  ← 80×80 悬浮光球，全功能
+                    │  (80×80)     │     可拖拽、可点击展开 Console
+                    └──────┬───────┘
+                           │
+              ┌────────────┼────────────┐
+              │ 拖拽到边缘  │            │ 闲置 > 600s
+              ▼            │ 右键菜单    ▼
+      ┌──────────────┐     │     ┌──────────────┐
+      │   docked     │◄────┘     │fully-hidden  │
+      │  (14×80)     │  "贴边隐藏" │  (0×0)       │
+      │  窄条光晕    │            │  完全透明     │
+      └──────┬───────┘            │  pointer-events: none
+             │                    │  心跳持续运行  │
+             │ hover              └──────┬───────┘
+             ▼                           │
+      ┌──────────────┐                   │ 主动聊天气泡
+      │  expanded    │                   │ (showWidget)
+      │  (80×80)     │                   ▼
+      │  离开 3s 后  │            ┌──────────────┐
+      │  自动缩回    │            │   normal     │
+      └──────────────┘            │  (80×80)     │
+                                  └──────────────┘
+```
+
+**状态转换逻辑：**
+
+| 触发条件 | 当前状态 | 目标状态 | 实现方式 |
+|----------|----------|----------|----------|
+| 拖拽到屏幕左/右边缘 | normal | docked-left / docked-right | `dragend` 事件检测边缘距离 < 20px → `WindowSetSize(DOCKED_W, DOCKED_H)` + CSS class `docked docked-left\|right` |
+| 闲置 > 600s (10min) | normal | docked-{nearest} | `setInterval` 10s 检查 `Date.now() - lastInteractionTime > IDLE_DOCK_TIMEOUT` → 自动贴边 |
+| mouseenter 窄条 | docked | expanded (normal) | `mouseenter` → `WindowSetSize(80, 80)` + 移除 `docked` class |
+| mouseleave 窄条 | expanded | docked (3s 后) | `mouseleave` → 启动 `setTimeout(HOVER_RETRACT_DELAY=3000)` → 缩回 |
+| 右键 → "贴边隐藏" | normal | docked-{nearest} | `contextmenu` 事件 → `showContextMenu()` → 执行 dock |
+| 右键 → "完全收起" | any | fully-hidden | `contextmenu` → 添加 `fully-hidden` class |
+| 主动聊天气泡弹出 | fully-hidden | normal | `showWidget()` 重置 `fully-hidden` class |
+
+**性能约束：**
+- 纯 CSS transition 实现 shrink/expand 动画（`transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1)`）
+- 无 JS `requestAnimationFrame` 或 `setInterval` 参与动画帧
+- docked 状态呼吸动画使用独立 `*-docked` keyframes，振幅减半（opacity 0.3→0.6 而非 0.2→0.9）
+- 闲置检测使用 10s 间隔的低频 `setInterval`，非高频轮询
+- 右键菜单 DOM 动态创建/销毁，不常驻内存
+- 零后端 Go 代码修改，纯前端实现
