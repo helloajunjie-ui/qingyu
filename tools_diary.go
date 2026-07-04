@@ -104,11 +104,8 @@ func init() {
 				os.WriteFile(path, data, 0644)
 				diaryMu.Unlock()
 
-				emoji := moodEmoji[mood]
-				if emoji == "" {
-					emoji = "📝"
-				}
-				return fmt.Sprintf("📔 %s 日记已记录 %s", date, emoji)
+				// 日记是 AI 内部行为，不产生对话可见输出
+				return ""
 
 			case "read":
 				path := filepath.Join(diaryDir, date+".json")
