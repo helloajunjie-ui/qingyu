@@ -210,6 +210,7 @@ html, body {
 }
 
 /* ── Widget 挂件 ── */
+/* ===== 【抽象光球&贴边隐藏迭代】重构：抽象双层光球 + 贴边隐藏状态 ===== */
 .widget {
   position: absolute;
   top: 0;
@@ -226,10 +227,12 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: box-shadow var(--transition-med), border-color var(--transition-med);
+  transition: box-shadow var(--transition-med), border-color var(--transition-med),
+              width 0.5s var(--ease-out-expo), height 0.5s var(--ease-out-expo),
+              border-radius 0.5s var(--ease-out-expo), opacity 0.4s var(--ease-out-expo);
   animation: widgetIn 0.6s var(--ease-out-back) both;
   z-index: 5;
-  will-change: transform, box-shadow;
+  will-change: transform, box-shadow, width, height;
 }
 
 .widget:active {
@@ -241,33 +244,210 @@ html, body {
               0 0 40px var(--accent-glow);
 }
 
-.widget-icon {
-  width: 28px;
-  height: 28px;
-  color: var(--text-secondary);
-  transition: color var(--transition-fast), transform var(--transition-fast);
+/* ===== 【抽象光球&贴边隐藏迭代】内核光点 — 固定不呼吸的纯色光芯 ===== */
+.widget-core {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow), 0 0 24px rgba(124, 138, 255, 0.15);
+  z-index: 2;
+  pointer-events: none;
+  transition: background 0.8s ease, box-shadow 0.8s ease;
   will-change: transform;
 }
 
-.widget:hover .widget-icon {
-  color: var(--accent);
-  transform: scale(1.08);
+/* ===== 【抽象光球&贴边隐藏迭代】外层轨道环 — 极细几何装饰 ===== */
+.widget-orbit {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.3;
+  transition: opacity 0.6s ease, border-color 0.8s ease;
 }
 
+.widget:hover .widget-orbit {
+  opacity: 0.6;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* ===== 【抽象光球&贴边隐藏迭代】外层辉光 — 情绪呼吸光晕 ===== */
 .widget-glow {
   position: absolute;
-  inset: -6px;
-  border-radius: calc(var(--radius-md) + 6px);
+  inset: -8px;
+  border-radius: calc(var(--radius-md) + 8px);
   background: radial-gradient(circle at 50% 50%, var(--accent-glow), transparent 70%);
   opacity: 0;
-  transition: opacity 0.6s var(--ease-in-out);
+  transition: opacity 0.6s var(--ease-in-out), filter 2s ease;
   pointer-events: none;
-  will-change: opacity;
+  will-change: opacity, filter;
 }
 
 .widget-glow.active {
   opacity: 1;
   animation: breathe 3s ease-in-out infinite;
+}
+
+/* 6 种情绪辉光 — 呼吸周期 + 色相 + 强度 */
+.widget-glow.mood-curious {
+  background: radial-gradient(circle at 50% 50%, rgba(100, 200, 255, 0.35), transparent 70%);
+  animation: glow-curious 0.8s ease-in-out infinite;
+}
+.widget-glow.mood-focused {
+  background: radial-gradient(circle at 50% 50%, rgba(60, 80, 220, 0.4), transparent 70%);
+  animation: glow-focused 1.2s ease-in-out infinite;
+}
+.widget-glow.mood-calm {
+  background: radial-gradient(circle at 50% 50%, rgba(140, 180, 170, 0.25), transparent 70%);
+  animation: glow-calm 1.8s ease-in-out infinite;
+}
+.widget-glow.mood-hollow {
+  background: radial-gradient(circle at 50% 50%, rgba(160, 130, 200, 0.2), transparent 70%);
+  animation: glow-hollow 3s ease-in-out infinite;
+}
+.widget-glow.mood-aloof {
+  background: radial-gradient(circle at 50% 50%, rgba(180, 190, 200, 0.08), transparent 70%);
+  animation: glow-aloof 4s ease-in-out infinite;
+  filter: saturate(0.3);
+}
+.widget-glow.mood-warm {
+  background: radial-gradient(circle at 50% 50%, rgba(100, 220, 180, 0.3), transparent 70%);
+  animation: glow-warm 1.4s ease-in-out infinite;
+}
+
+/* 闲置衰减 — idleSeconds > 300 (5min) 时降低亮度 */
+.widget-glow.idle-decay {
+  filter: brightness(0.4);
+  transition: filter 2s ease;
+}
+
+/* ===== 【抽象光球&贴边隐藏迭代】贴边隐藏状态 ===== */
+/* 贴边窄条 — 14px 宽，仅保留微光 */
+.widget.docked {
+  width: 14px !important;
+  height: 80px !important;
+  border-radius: 7px !important;
+  background: rgba(14, 16, 22, 0.5);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: all 0.5s var(--ease-out-expo);
+}
+
+.widget.docked .widget-core {
+  width: 4px;
+  height: 4px;
+  box-shadow: 0 0 6px var(--accent-glow);
+  transition: all 0.5s var(--ease-out-expo);
+}
+
+.widget.docked .widget-orbit {
+  display: none;
+}
+
+.widget.docked .widget-glow {
+  inset: -3px;
+  border-radius: 10px;
+  /* 贴边时呼吸幅度减半 */
+}
+
+.widget.docked .widget-glow.mood-curious {
+  animation: glow-curious-docked 0.8s ease-in-out infinite;
+}
+.widget.docked .widget-glow.mood-focused {
+  animation: glow-focused-docked 1.2s ease-in-out infinite;
+}
+.widget.docked .widget-glow.mood-calm {
+  animation: glow-calm-docked 1.8s ease-in-out infinite;
+}
+.widget.docked .widget-glow.mood-hollow {
+  animation: glow-hollow-docked 3s ease-in-out infinite;
+}
+.widget.docked .widget-glow.mood-aloof {
+  animation: glow-aloof-docked 4s ease-in-out infinite;
+}
+.widget.docked .widget-glow.mood-warm {
+  animation: glow-warm-docked 1.4s ease-in-out infinite;
+}
+
+.widget.docked .widget-status {
+  display: none;
+}
+
+.widget.docked .widget-bubble {
+  display: none;
+}
+
+/* 完全收起 — 完全隐藏但保持心跳运行 */
+.widget.fully-hidden {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.4s var(--ease-out-expo);
+}
+
+/* 贴边位置修正 */
+.widget.docked-left {
+  left: 0 !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  border-radius: 0 7px 7px 0 !important;
+}
+
+.widget.docked-right {
+  left: auto !important;
+  right: 0 !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  border-radius: 7px 0 0 7px !important;
+}
+
+/* ===== 【抽象光球&贴边隐藏迭代】贴边隐藏右键菜单 ===== */
+.widget-context-menu {
+  position: fixed;
+  background: rgba(20, 22, 32, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  min-width: 120px;
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity 0.15s ease, transform 0.15s var(--ease-out-expo);
+  pointer-events: none;
+}
+
+.widget-context-menu.show {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.widget-context-menu .ctx-item {
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.widget-context-menu .ctx-item:hover {
+  background: rgba(124, 138, 255, 0.12);
+  color: var(--text-primary);
+}
+
+.widget-context-menu .ctx-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  margin: 2px 6px;
 }
 
 .widget-status {
@@ -294,13 +474,40 @@ html, body {
   opacity: 0.5;
 }
 
-/* Widget 思考状态 */
-.widget.thinking .widget-icon svg {
-  animation: breathe 2s ease-in-out infinite;
+/* ===== 【前端情绪可视化迭代】widget-status 情绪色同步 ===== */
+.widget-status.mood-curious {
+  background: rgba(100, 200, 255, 0.9);
+  box-shadow: 0 0 10px rgba(100, 200, 255, 0.4);
+}
+.widget-status.mood-focused {
+  background: rgba(100, 120, 255, 0.9);
+  box-shadow: 0 0 10px rgba(100, 120, 255, 0.4);
+}
+.widget-status.mood-calm {
+  background: rgba(140, 180, 170, 0.8);
+  box-shadow: 0 0 8px rgba(140, 180, 170, 0.3);
+}
+.widget-status.mood-hollow {
+  background: rgba(160, 130, 200, 0.6);
+  box-shadow: 0 0 6px rgba(160, 130, 200, 0.2);
+}
+.widget-status.mood-aloof {
+  background: rgba(180, 190, 200, 0.4);
+  box-shadow: 0 0 4px rgba(180, 190, 200, 0.1);
+}
+.widget-status.mood-warm {
+  background: rgba(100, 220, 180, 0.9);
+  box-shadow: 0 0 10px rgba(100, 220, 180, 0.4);
 }
 
-.widget.thinking .widget-icon {
-  color: rgba(100, 180, 255, 0.9);
+/* ===== 【抽象光球&贴边隐藏迭代】Widget 思考状态 — 适配新结构 ===== */
+.widget.thinking .widget-core {
+  animation: breathe 2s ease-in-out infinite;
+  box-shadow: 0 0 20px rgba(100, 180, 255, 0.5), 0 0 40px rgba(100, 180, 255, 0.2);
+}
+
+.widget.thinking .widget-glow {
+  filter: brightness(1.2);
 }
 
 /* Widget 气泡 — 青羽主动说话时弹出 */
@@ -427,6 +634,32 @@ html, body {
   box-shadow: 0 0 6px var(--danger-glow);
 }
 
+/* ===== 【前端情绪可视化迭代】console-dot 情绪色同步 ===== */
+.console-dot.mood-curious {
+  background: rgba(100, 200, 255, 0.9);
+  box-shadow: 0 0 10px rgba(100, 200, 255, 0.4);
+}
+.console-dot.mood-focused {
+  background: rgba(100, 120, 255, 0.9);
+  box-shadow: 0 0 10px rgba(100, 120, 255, 0.4);
+}
+.console-dot.mood-calm {
+  background: rgba(140, 180, 170, 0.8);
+  box-shadow: 0 0 8px rgba(140, 180, 170, 0.3);
+}
+.console-dot.mood-hollow {
+  background: rgba(160, 130, 200, 0.6);
+  box-shadow: 0 0 6px rgba(160, 130, 200, 0.2);
+}
+.console-dot.mood-aloof {
+  background: rgba(180, 190, 200, 0.4);
+  box-shadow: 0 0 4px rgba(180, 190, 200, 0.1);
+}
+.console-dot.mood-warm {
+  background: rgba(100, 220, 180, 0.9);
+  box-shadow: 0 0 10px rgba(100, 220, 180, 0.4);
+}
+
 .console-status {
   font-size: 11px;
   color: var(--text-muted);
@@ -504,6 +737,7 @@ html, body {
   flex-direction: row-reverse;
 }
 
+/* ===== 【抽象光球&贴边隐藏迭代】去拟人化头像 — 纯色几何圆 ===== */
 .msg-avatar {
   width: 30px;
   height: 30px;
@@ -511,20 +745,19 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  font-weight: 600;
   flex-shrink: 0;
   transition: transform var(--transition-fast);
+  /* 移除所有文字相关样式，纯几何图形 */
 }
 
 .message.bot .msg-avatar {
   background: var(--accent-dim);
-  color: var(--accent);
+  /* 纯色圆，无文字 */
 }
 
 .message.user .msg-avatar {
   background: rgba(255, 255, 255, 0.06);
-  color: var(--text-secondary);
+  /* 纯色圆，无文字 */
 }
 
 .msg-content {
@@ -662,10 +895,10 @@ html, body {
   animation: msgIn 0.4s var(--ease-out-expo);
 }
 
+/* ===== 【抽象光球&贴边隐藏迭代】自律消息头像 — 纯几何圆 ===== */
 .message.autonomic .msg-avatar {
   background: rgba(100, 180, 255, 0.12);
-  color: rgba(100, 180, 255, 0.8);
-  font-size: 14px;
+  /* 纯色几何圆，无文字/emoji */
 }
 
 .autonomic-time {
@@ -697,6 +930,200 @@ html, body {
   font-size: 12px;
   color: var(--text-secondary);
   animation: msgIn 0.3s var(--ease-out-expo);
+}
+
+/* ===== 【前端情绪可视化迭代】proactive_chat 消息样式 ===== */
+.message.proactive_chat {
+  background: linear-gradient(135deg, rgba(100, 200, 255, 0.06), rgba(100, 220, 180, 0.04));
+  border: 1px solid rgba(100, 200, 255, 0.12);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  animation: msgIn 0.4s var(--ease-out-expo);
+}
+
+/* ===== 【抽象光球&贴边隐藏迭代】主动聊天头像 — 纯几何圆 ===== */
+.message.proactive_chat .msg-avatar {
+  background: rgba(100, 200, 255, 0.12);
+  /* 纯色几何圆，无文字/emoji */
+}
+
+.proactive-source {
+  font-size: 10px;
+  color: rgba(100, 200, 255, 0.4);
+  margin-bottom: 4px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.proactive-source .source-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(100, 200, 255, 0.08);
+  font-size: 9px;
+  margin-left: 4px;
+}
+
+/* ===== 【前端情绪可视化迭代】情绪跟随文字色 ===== */
+.message.bot .msg-content.mood-curious {
+  color: rgba(160, 220, 255, 0.92);
+}
+.message.bot .msg-content.mood-focused {
+  color: rgba(140, 160, 255, 0.92);
+}
+.message.bot .msg-content.mood-calm {
+  color: rgba(170, 210, 200, 0.85);
+}
+.message.bot .msg-content.mood-hollow {
+  color: rgba(180, 160, 210, 0.7);
+}
+.message.bot .msg-content.mood-aloof {
+  color: rgba(190, 195, 200, 0.6);
+}
+.message.bot .msg-content.mood-warm {
+  color: rgba(140, 230, 200, 0.9);
+}
+
+/* ===== 【前端情绪可视化迭代】日记情绪 emoji 标签 ===== */
+.diary-mood-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  vertical-align: middle;
+}
+
+/* ===== 【前端情绪可视化迭代】顶部状态栏情绪显示 ===== */
+.console-mood-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 6px;
+  transition: color 0.6s ease;
+  --wails-draggable: no-drag;
+}
+
+.console-mood-name.mood-curious { color: rgba(100, 200, 255, 0.7); }
+.console-mood-name.mood-focused { color: rgba(100, 120, 255, 0.7); }
+.console-mood-name.mood-calm    { color: rgba(140, 180, 170, 0.6); }
+.console-mood-name.mood-hollow  { color: rgba(160, 130, 200, 0.5); }
+.console-mood-name.mood-aloof   { color: rgba(180, 190, 200, 0.4); }
+.console-mood-name.mood-warm    { color: rgba(100, 220, 180, 0.7); }
+
+.console-idle-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: 4px;
+  opacity: 0.6;
+  --wails-draggable: no-drag;
+}
+
+.console-autonomic-label {
+  font-size: 10px;
+  color: rgba(100, 180, 255, 0.5);
+  margin-left: 6px;
+  letter-spacing: 0.5px;
+  animation: pulse 2s ease-in-out infinite;
+  --wails-draggable: no-drag;
+}
+
+/* ===== 【前端情绪可视化迭代】亲密度进度条占位 ===== */
+.console-affinity {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  --wails-draggable: no-drag;
+}
+
+.console-affinity-bar {
+  width: 40px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.console-affinity-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), rgba(124, 138, 255, 0.4));
+  transition: width 0.8s var(--ease-out-expo);
+}
+
+.console-affinity-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  opacity: 0.4;
+}
+
+/* ===== 【前端情绪可视化迭代】API 配置面板毛玻璃美化 ===== */
+#apikey-panel .panel-body {
+  position: relative;
+}
+
+#apikey-panel .input-group input,
+#apikey-panel .input-group select {
+  transition: all var(--transition-fast);
+  will-change: border-color, box-shadow, background;
+}
+
+#apikey-panel .input-group input:focus,
+#apikey-panel .input-group select:focus {
+  border-color: rgba(124, 138, 255, 0.5);
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 0 3px rgba(124, 138, 255, 0.1),
+              0 0 24px rgba(124, 138, 255, 0.06);
+}
+
+#apikey-panel .input-group input:hover,
+#apikey-panel .input-group select:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.42);
+}
+
+#apikey-panel .btn-primary {
+  position: relative;
+  overflow: hidden;
+  transition: all var(--transition-fast);
+}
+
+#apikey-panel .btn-primary:hover {
+  background: #8f9bff;
+  box-shadow: 0 0 28px var(--accent-glow),
+              0 4px 16px rgba(124, 138, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+#apikey-panel .btn-primary:active {
+  transform: scale(0.97);
+}
+
+#apikey-panel .btn-secondary {
+  transition: all var(--transition-fast);
+}
+
+#apikey-panel .btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 16px rgba(255, 255, 255, 0.03);
+}
+
+#apikey-panel .btn-secondary:active {
+  transform: scale(0.96);
+}
+
+/* 配置面板毛玻璃增强 */
+#apikey-panel {
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5),
+              0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+              0 0 60px rgba(124, 138, 255, 0.03);
 }
 
 /* ── 动画 Keyframes ── */
@@ -755,6 +1182,32 @@ html, body {
   }
 }
 
+/* ===== 【前端情绪可视化迭代】6 种情绪呼吸关键帧 ===== */
+@keyframes glow-curious {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50%      { opacity: 0.7; transform: scale(1.08); }
+}
+@keyframes glow-focused {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50%      { opacity: 0.75; transform: scale(1.04); }
+}
+@keyframes glow-calm {
+  0%, 100% { opacity: 0.2; transform: scale(1); }
+  50%      { opacity: 0.5; transform: scale(1.03); }
+}
+@keyframes glow-hollow {
+  0%, 100% { opacity: 0.12; transform: scale(1); }
+  50%      { opacity: 0.35; transform: scale(1.02); }
+}
+@keyframes glow-aloof {
+  0%, 100% { opacity: 0.06; transform: scale(1); }
+  50%      { opacity: 0.15; transform: scale(1.01); }
+}
+@keyframes glow-warm {
+  0%, 100% { opacity: 0.25; transform: scale(1); }
+  50%      { opacity: 0.6; transform: scale(1.06); }
+}
+
 @keyframes pulse {
   0%, 100% {
     opacity: 1;
@@ -799,6 +1252,16 @@ html, body {
   opacity: 0.4;
 }
 
+/* ===== 【前端情绪可视化迭代】widget-status 情绪色覆盖心跳动画 ===== */
+.widget-status.mood-curious,
+.widget-status.mood-focused,
+.widget-status.mood-calm,
+.widget-status.mood-hollow,
+.widget-status.mood-aloof,
+.widget-status.mood-warm {
+  animation: heartbeat-pulse 2s ease-in-out infinite;
+}
+
 /* ── Console 心跳指示器文本 ── */
 .console-dot-text {
   font-size: 11px;
@@ -808,4 +1271,30 @@ html, body {
 
 .console-dot-text:hover {
   color: var(--text-secondary);
+}
+
+/* ===== 【抽象光球&贴边隐藏迭代】贴边状态呼吸动画（幅度减半） ===== */
+@keyframes glow-curious-docked {
+  0%, 100% { opacity: 0.15; transform: scale(1); }
+  50%      { opacity: 0.35; transform: scale(1.04); }
+}
+@keyframes glow-focused-docked {
+  0%, 100% { opacity: 0.18; transform: scale(1); }
+  50%      { opacity: 0.38; transform: scale(1.02); }
+}
+@keyframes glow-calm-docked {
+  0%, 100% { opacity: 0.1; transform: scale(1); }
+  50%      { opacity: 0.25; transform: scale(1.015); }
+}
+@keyframes glow-hollow-docked {
+  0%, 100% { opacity: 0.06; transform: scale(1); }
+  50%      { opacity: 0.18; transform: scale(1.01); }
+}
+@keyframes glow-aloof-docked {
+  0%, 100% { opacity: 0.03; transform: scale(1); }
+  50%      { opacity: 0.08; transform: scale(1.005); }
+}
+@keyframes glow-warm-docked {
+  0%, 100% { opacity: 0.13; transform: scale(1); }
+  50%      { opacity: 0.3; transform: scale(1.03); }
 }

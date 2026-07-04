@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+// 全局 App 引用，供 memory 层读取情绪状态（仅读取 moodState，不引入循环依赖）
+var globalApp *App
+
 // newUUID 生成 v4 UUID（无外部依赖）
 func newUUID() string {
 	u := make([]byte, 16)
@@ -348,6 +351,21 @@ func (ms *MemoryStore) Save(entry *MemoryEntry) error {
 	}
 	entry.UpdatedAt = now
 
+	// 人性化：情绪标签自动烙印（仅写入标签，不写入长文本）
+	if globalApp != nil && globalApp.moodState != "" {
+		moodTag := "mood:" + globalApp.moodState
+		hasTag := false
+		for _, t := range entry.Tags {
+			if t == moodTag {
+				hasTag = true
+				break
+			}
+		}
+		if !hasTag {
+			entry.Tags = append(entry.Tags, moodTag)
+		}
+	}
+
 	// 确定存储路径
 	var path string
 	if entry.Importance >= ImportanceCore {
@@ -477,10 +495,31 @@ func (ms *MemoryStore) Search(query SearchQuery) ([]*MemoryEntry, error) {
 		sort.Slice(candidates, func(i, j int) bool {
 			return candidates[i].UpdatedAt > candidates[j].UpdatedAt
 		})
-	default: // importance
+	default: // importance + 情绪标签加权
+		currentMoodTag := ""
+		if globalApp != nil && globalApp.moodState != "" {
+			currentMoodTag = "mood:" + globalApp.moodState
+		}
 		sort.Slice(candidates, func(i, j int) bool {
-			if candidates[i].Importance != candidates[j].Importance {
-				return candidates[i].Importance > candidates[j].Importance
+			// 情绪标签加权：与当前情绪匹配的记忆提升 2 级重要性
+			impI := candidates[i].Importance
+			impJ := candidates[j].Importance
+			if currentMoodTag != "" {
+				for _, t := range candidates[i].Tags {
+					if t == currentMoodTag {
+						impI += 2
+						break
+					}
+				}
+				for _, t := range candidates[j].Tags {
+					if t == currentMoodTag {
+						impJ += 2
+						break
+					}
+				}
+			}
+			if impI != impJ {
+				return impI > impJ
 			}
 			return candidates[i].UpdatedAt > candidates[j].UpdatedAt
 		})
@@ -648,16 +687,29 @@ func (ms *MemoryStore) Decay() (archived int, deleted int, err error) {
 		}
 	}
 
-	// 处理归档
+	// 处理归档（自动摘要长内容）
 	for _, ie := range toArchive {
 		entry, loadErr := ms.loadEntryByID(ie.ID)
 		if loadErr != nil {
 			continue
 		}
+
+		// 如果内容过长，归档时自动摘要压缩
+		contentRunes := []rune(entry.Content)
+		if len(contentRunes) > 300 {
+			// 尝试用轻量模型摘要（如果可用）
+			// 回退：保留前 150 字作为摘要
+			summary := string(contentRunes[:150])
+			if len(contentRunes) > 150 {
+				summary += "\n\n[原始内容已压缩，完整版本见备份]"
+			}
+			entry.Content = summary
+		}
+
 		// 移入归档
 		srcPath := ms.entryPath(ie.ID, entry.Importance)
 		dstPath := ms.archivePath(ie.ID)
-		data, _ := os.ReadFile(srcPath)
+		data, _ := json.MarshalIndent(entry, "", "  ")
 		os.WriteFile(dstPath, data, 0644)
 		os.Remove(srcPath)
 

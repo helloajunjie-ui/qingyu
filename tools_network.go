@@ -21,29 +21,31 @@ func init() {
 				return "错误：未提供 URL"
 			}
 
-			client := &http.Client{Timeout: time.Duration(GetSettings().Timeouts.NetworkFetch) * time.Second}
-			req, err := http.NewRequest("GET", url, nil)
-			if err != nil {
-				return fmt.Sprintf("请求构建失败: %v", err)
-			}
-			req.Header.Set("User-Agent", "Qingyu/1.0 (Ambient Agent)")
+			return CachedNetworkCall("fetch", url, func() string {
+				client := &http.Client{Timeout: time.Duration(GetSettings().Timeouts.NetworkFetch) * time.Second}
+				req, err := http.NewRequest("GET", url, nil)
+				if err != nil {
+					return fmt.Sprintf("请求构建失败: %v", err)
+				}
+				req.Header.Set("User-Agent", "Qingyu/1.0 (Ambient Agent)")
 
-			resp, err := client.Do(req)
-			if err != nil {
-				return fmt.Sprintf("无法访问该网址: %v", err)
-			}
-			defer resp.Body.Close()
+				resp, err := client.Do(req)
+				if err != nil {
+					return fmt.Sprintf("无法访问该网址: %v", err)
+				}
+				defer resp.Body.Close()
 
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return fmt.Sprintf("读取响应失败: %v", err)
-			}
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return fmt.Sprintf("读取响应失败: %v", err)
+				}
 
-			content := string(body)
-			if len(content) > 3000 {
-				content = content[:3000] + "\n\n... (内容过长，已截断)"
-			}
-			return fmt.Sprintf("网址 [%s] 的内容 (HTTP %d):\n%s", url, resp.StatusCode, content)
+				content := string(body)
+				if len(content) > 3000 {
+					content = content[:3000] + "\n\n... (内容过长，已截断)"
+				}
+				return fmt.Sprintf("网址 [%s] 的内容 (HTTP %d):\n%s", url, resp.StatusCode, content)
+			})
 		},
 	}
 
@@ -57,53 +59,55 @@ func init() {
 				return "错误：未提供搜索关键词"
 			}
 
-			url := fmt.Sprintf("https://api.duckduckgo.com/?q=%s&format=json&no_html=1&skip_disambig=1", url.QueryEscape(query))
+			return CachedNetworkCall("search", query, func() string {
+				searchURL := fmt.Sprintf("https://api.duckduckgo.com/?q=%s&format=json&no_html=1&skip_disambig=1", url.QueryEscape(query))
 
-			client := &http.Client{Timeout: 10 * time.Second}
-			req, _ := http.NewRequest("GET", url, nil)
-			req.Header.Set("User-Agent", "Qingyu/1.0")
+				client := &http.Client{Timeout: 10 * time.Second}
+				req, _ := http.NewRequest("GET", searchURL, nil)
+				req.Header.Set("User-Agent", "Qingyu/1.0")
 
-			resp, err := client.Do(req)
-			if err != nil {
-				return fmt.Sprintf("搜索失败: %v", err)
-			}
-			defer resp.Body.Close()
-
-			body, _ := io.ReadAll(resp.Body)
-			var result struct {
-				AbstractText  string `json:"AbstractText"`
-				AbstractURL   string `json:"AbstractURL"`
-				Answer        string `json:"Answer"`
-				RelatedTopics []struct {
-					Text     string `json:"Text"`
-					FirstURL string `json:"FirstURL"`
-				} `json:"RelatedTopics"`
-			}
-			json.Unmarshal(body, &result)
-
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("搜索结果: %s\n\n", query))
-			if result.Answer != "" {
-				sb.WriteString(fmt.Sprintf("📌 %s\n\n", result.Answer))
-			}
-			if result.AbstractText != "" {
-				sb.WriteString(fmt.Sprintf("📖 %s\n", result.AbstractText))
-				if result.AbstractURL != "" {
-					sb.WriteString(fmt.Sprintf("   %s\n", result.AbstractURL))
+				resp, err := client.Do(req)
+				if err != nil {
+					return fmt.Sprintf("搜索失败: %v", err)
 				}
-				sb.WriteString("\n")
-			}
-			count := 0
-			for _, topic := range result.RelatedTopics {
-				if topic.Text != "" && count < 5 {
-					sb.WriteString(fmt.Sprintf("• %s\n", topic.Text))
-					count++
+				defer resp.Body.Close()
+
+				body, _ := io.ReadAll(resp.Body)
+				var result struct {
+					AbstractText  string `json:"AbstractText"`
+					AbstractURL   string `json:"AbstractURL"`
+					Answer        string `json:"Answer"`
+					RelatedTopics []struct {
+						Text     string `json:"Text"`
+						FirstURL string `json:"FirstURL"`
+					} `json:"RelatedTopics"`
 				}
-			}
-			if sb.Len() < 20 {
-				sb.WriteString("(未找到结构化结果，建议使用 fetch_url 直接访问网页)\n")
-			}
-			return sb.String()
+				json.Unmarshal(body, &result)
+
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("搜索结果: %s\n\n", query))
+				if result.Answer != "" {
+					sb.WriteString(fmt.Sprintf("📌 %s\n\n", result.Answer))
+				}
+				if result.AbstractText != "" {
+					sb.WriteString(fmt.Sprintf("📖 %s\n", result.AbstractText))
+					if result.AbstractURL != "" {
+						sb.WriteString(fmt.Sprintf("   %s\n", result.AbstractURL))
+					}
+					sb.WriteString("\n")
+				}
+				count := 0
+				for _, topic := range result.RelatedTopics {
+					if topic.Text != "" && count < 5 {
+						sb.WriteString(fmt.Sprintf("• %s\n", topic.Text))
+						count++
+					}
+				}
+				if sb.Len() < 20 {
+					sb.WriteString("(未找到结构化结果，建议使用 fetch_url 直接访问网页)\n")
+				}
+				return sb.String()
+			})
 		},
 	}
 
@@ -112,22 +116,24 @@ func init() {
 		Description: "【IP 查询】获取当前的公网 IP 地址。无需参数",
 		Category:    "网络",
 		Execute: func(args map[string]string) string {
-			client := &http.Client{Timeout: 10 * time.Second}
-			resp, err := client.Get("https://api.ipify.org?format=json")
-			if err != nil {
-				return fmt.Sprintf("IP 查询失败: %v", err)
-			}
-			defer resp.Body.Close()
+			return CachedNetworkCall("ip", "global", func() string {
+				client := &http.Client{Timeout: 10 * time.Second}
+				resp, err := client.Get("https://api.ipify.org?format=json")
+				if err != nil {
+					return fmt.Sprintf("IP 查询失败: %v", err)
+				}
+				defer resp.Body.Close()
 
-			body, _ := io.ReadAll(resp.Body)
-			var result struct {
-				IP string `json:"ip"`
-			}
-			json.Unmarshal(body, &result)
-			if result.IP != "" {
-				return fmt.Sprintf("🌐 公网 IP: %s", result.IP)
-			}
-			return "IP 查询失败"
+				body, _ := io.ReadAll(resp.Body)
+				var result struct {
+					IP string `json:"ip"`
+				}
+				json.Unmarshal(body, &result)
+				if result.IP != "" {
+					return fmt.Sprintf("🌐 公网 IP: %s", result.IP)
+				}
+				return "IP 查询失败"
+			})
 		},
 	}
 
@@ -185,24 +191,26 @@ func init() {
 				city = "Beijing"
 			}
 
-			url := fmt.Sprintf("https://wttr.in/%s?format=%%l:+%%c+%%t,+%%w,+%%h,+%%p&lang=zh", url.QueryEscape(city))
+			return CachedNetworkCall("weather", city, func() string {
+				weatherURL := fmt.Sprintf("https://wttr.in/%s?format=%%l:+%%c+%%t,+%%w,+%%h,+%%p&lang=zh", url.QueryEscape(city))
 
-			client := &http.Client{Timeout: 10 * time.Second}
-			req, _ := http.NewRequest("GET", url, nil)
-			req.Header.Set("User-Agent", "Qingyu/1.0")
+				client := &http.Client{Timeout: 10 * time.Second}
+				req, _ := http.NewRequest("GET", weatherURL, nil)
+				req.Header.Set("User-Agent", "Qingyu/1.0")
 
-			resp, err := client.Do(req)
-			if err != nil {
-				return fmt.Sprintf("天气查询失败: %v", err)
-			}
-			defer resp.Body.Close()
+				resp, err := client.Do(req)
+				if err != nil {
+					return fmt.Sprintf("天气查询失败: %v", err)
+				}
+				defer resp.Body.Close()
 
-			body, _ := io.ReadAll(resp.Body)
-			weather := strings.TrimSpace(string(body))
-			if weather == "" {
-				return fmt.Sprintf("未获取到 %s 的天气信息", city)
-			}
-			return fmt.Sprintf("🌤 %s 天气: %s", city, weather)
+				body, _ := io.ReadAll(resp.Body)
+				weather := strings.TrimSpace(string(body))
+				if weather == "" {
+					return fmt.Sprintf("未获取到 %s 的天气信息", city)
+				}
+				return fmt.Sprintf("🌤 %s 天气: %s", city, weather)
+			})
 		},
 	}
 }

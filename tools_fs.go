@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func init() {
@@ -83,6 +84,25 @@ func init() {
 			if err != nil {
 				return fmt.Sprintf("写入失败: %v", err)
 			}
+
+			// ===== human_ext 增量优化：人格修改行为自动写入轻量记忆 =====
+			// 拦截 write_file 写入 workspace/系统提示.md，自动创建轻量记忆
+			if filepath.Base(filename) == "系统提示.md" {
+				if ms := GetMemoryStore(); ms != nil {
+					moodTag := "calm"
+					if globalApp != nil && globalApp.moodState != "" {
+						moodTag = globalApp.moodState
+					}
+					entry := &MemoryEntry{
+						Topic:      "自我人格变更记录",
+						Content:    "青羽在" + time.Now().Format("2006-01-02 15:04") + "修改了系统提示，调整了自我认知与行为倾向。",
+						Tags:       []string{"persona_edit", "mood:" + moodTag},
+						Importance: 6,
+					}
+					ms.Save(entry)
+				}
+			}
+
 			return fmt.Sprintf("文件已写入: %s (%d 字节)", safePath, len(content))
 		},
 	}

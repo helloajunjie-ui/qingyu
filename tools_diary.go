@@ -41,6 +41,12 @@ func init() {
 					mood = "calm"
 				}
 
+				// ===== human_ext 增量优化：日记自动绑定当前情绪标签 =====
+				// 若用户未指定 mood，自动注入运行时全局情绪状态
+				if args["mood"] == "" && globalApp != nil && globalApp.moodState != "" {
+					mood = globalApp.moodState
+				}
+
 				entry := map[string]string{
 					"date":    date,
 					"mood":    mood,

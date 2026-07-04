@@ -29,6 +29,9 @@ const el = {
 
   widget:        $('#widget'),
   widgetGlow:    $('#widget-glow'),
+  // ===== 【抽象光球&贴边隐藏迭代】新增内核光点 + 轨道环引用 =====
+  widgetCore:    $('#widget-core'),
+  widgetOrbit:   $('#widget-orbit'),
   widgetStatus:  $('#widget-status'),
   widgetBubble:  $('#widget-bubble'),
   widgetBubbleText: $('#widget-bubble-text'),
@@ -44,6 +47,12 @@ const el = {
 
   btnMinimize:   $('#btn-minimize'),
   btnClose:      $('#btn-close'),
+
+  // ===== 【前端情绪可视化迭代】新增 DOM 引用 =====
+  consoleMoodName:     $('#console-mood-name'),
+  consoleIdleTime:     $('#console-idle-time'),
+  consoleAutonomicLabel: $('#console-autonomic-label'),
+  consoleAffinityFill: $('#console-affinity-fill'),
 };
 
 // ── 常量 ──
@@ -51,6 +60,10 @@ const WIDGET_SIZE = 80;
 const CONSOLE_W = 400;
 const CONSOLE_H = 540;
 const MARGIN = 20;
+const DOCKED_W = 14;   // ===== 【抽象光球&贴边隐藏迭代】贴边窄条宽度 =====
+const DOCKED_H = 80;   // ===== 【抽象光球&贴边隐藏迭代】贴边窄条高度 =====
+const IDLE_DOCK_TIMEOUT = 600000; // 600s 闲置自动贴边
+const HOVER_RETRACT_DELAY = 3000; // 鼠标离开 3s 后自动缩回
 
 // ── 状态 ──
 let creatorName = '';
@@ -59,6 +72,12 @@ let autonomicActive = false;
 let autonomicLog = [];
 let heartbeatState = { beat: 0, rate: 2000, phase: 'resting', mood: 'calm', autonomic: false };
 let lastHeartbeatTime = Date.now();
+// ===== 【抽象光球&贴边隐藏迭代】贴边隐藏状态变量 =====
+let edgeSnapState = 'normal'; // normal | docked-left | docked-right | fully-hidden
+let lastInteractionTime = Date.now();
+let isHovering = false;
+let idleDockTimer = null;
+let hoverRetractTimer = null;
 
 // ── 窗口控制 ──
 function morphWindow(w, h) {
@@ -81,9 +100,19 @@ function snapToCenter(w, h) {
   } catch (_) {}
 }
 
+// ===== 【抽象光球&贴边隐藏迭代】shrinkToWidget — 支持贴边状态 =====
 function shrinkToWidget() {
-  morphWindow(WIDGET_SIZE, WIDGET_SIZE);
-  snapToBottomRight(WIDGET_SIZE, WIDGET_SIZE);
+  if (edgeSnapState === 'docked-left' || edgeSnapState === 'docked-right') {
+    morphWindow(DOCKED_W, DOCKED_H);
+    if (edgeSnapState === 'docked-left') {
+      try { window.runtime.WindowSetPosition(0, (window.screen.availHeight - DOCKED_H) / 2); } catch (_) {}
+    } else {
+      try { window.runtime.WindowSetPosition(window.screen.availWidth - DOCKED_W, (window.screen.availHeight - DOCKED_H) / 2); } catch (_) {}
+    }
+  } else {
+    morphWindow(WIDGET_SIZE, WIDGET_SIZE);
+    snapToBottomRight(WIDGET_SIZE, WIDGET_SIZE);
+  }
 }
 
 function expandToConsole() {
@@ -128,8 +157,14 @@ function showApiKey() {
   el.apiUrlInput.focus();
 }
 
+// ===== 【抽象光球&贴边隐藏迭代】showWidget — 重置贴边状态 =====
 function showWidget() {
   hideAll();
+  // 如果处于完全收起状态，恢复为 normal
+  if (edgeSnapState === 'fully-hidden') {
+    edgeSnapState = 'normal';
+    el.widget.classList.remove('fully-hidden');
+  }
   el.widget.classList.remove('hidden');
   requestAnimationFrame(() => {
     el.widgetGlow.classList.add('active');
@@ -191,10 +226,13 @@ async function init() {
     } catch (_) {}
   });
 
+  // ===== 【前端情绪可视化迭代】离线检测 — 清除情绪辉光 =====
   setInterval(() => {
     if (Date.now() - lastHeartbeatTime > 3000) {
       el.widgetStatus.className = 'widget-status offline';
       el.widgetGlow.classList.remove('active');
+      Object.values(moodGlowMap).forEach(c => el.widgetGlow.classList.remove(c));
+      el.widgetGlow.classList.remove('idle-decay');
     }
   }, 1000);
 
@@ -220,7 +258,7 @@ async function init() {
     } catch (_) {}
   });
 
-  // 主动聊天事件 — 青羽主动找伙伴聊天
+  // ===== 【前端情绪可视化迭代】主动聊天事件 — 青羽主动找伙伴聊天 =====
   EventsOn('proactive_chat', (payload) => {
     try {
       const data = JSON.parse(payload);
@@ -230,9 +268,9 @@ async function init() {
         bubbleText.textContent = data.message;
         bubble.classList.add('show');
 
-        // 如果控制台已打开，也显示在聊天区
+        // 如果控制台已打开，也显示在聊天区（带 source 标签）
         if (!el.console.classList.contains('hidden')) {
-          addMessage(data.message, 'bot');
+          addProactiveChatMessage(data);
         }
 
         // 8 秒后气泡自动消失
@@ -271,6 +309,119 @@ async function init() {
       }
     } catch (_) {}
   });
+
+  // ===== 【抽象光球&贴边隐藏迭代】边缘吸附逻辑 =====
+  // 闲置自动贴边定时器
+  idleDockTimer = setInterval(() => {
+    const idle = Date.now() - lastInteractionTime;
+    if (idle > IDLE_DOCK_TIMEOUT && edgeSnapState === 'normal' && el.widget.classList.contains('hidden') === false) {
+      // 自动滑向最近边缘（右下角 → 右边缘）
+      edgeSnapState = 'docked-right';
+      el.widget.classList.add('docked', 'docked-right');
+      shrinkToWidget();
+    }
+  }, 10000);
+
+  // 鼠标进入贴边条 → 展开
+  el.widget.addEventListener('mouseenter', () => {
+    if (edgeSnapState === 'docked-left' || edgeSnapState === 'docked-right') {
+      isHovering = true;
+      clearTimeout(hoverRetractTimer);
+      // 展开为完整光球
+      edgeSnapState = 'normal';
+      el.widget.classList.remove('docked', 'docked-left', 'docked-right');
+      morphWindow(WIDGET_SIZE, WIDGET_SIZE);
+      // 保持在贴边位置
+      if (edgeSnapState === 'docked-left') {
+        try { window.runtime.WindowSetPosition(0, (window.screen.availHeight - WIDGET_SIZE) / 2); } catch (_) {}
+      } else {
+        try { window.runtime.WindowSetPosition(window.screen.availWidth - WIDGET_SIZE - MARGIN, (window.screen.availHeight - WIDGET_SIZE) / 2); } catch (_) {}
+      }
+    }
+  });
+
+  // 鼠标离开 → 3s 后自动缩回
+  el.widget.addEventListener('mouseleave', () => {
+    if (isHovering) {
+      isHovering = false;
+      clearTimeout(hoverRetractTimer);
+      hoverRetractTimer = setTimeout(() => {
+        if (!isHovering && edgeSnapState === 'normal') {
+          // 判断离哪边近
+          try {
+            const rect = window.runtime.WindowGetPos();
+            // 简化：默认贴右
+            edgeSnapState = 'docked-right';
+            el.widget.classList.add('docked', 'docked-right');
+            shrinkToWidget();
+          } catch (_) {
+            edgeSnapState = 'docked-right';
+            el.widget.classList.add('docked', 'docked-right');
+            shrinkToWidget();
+          }
+        }
+      }, HOVER_RETRACT_DELAY);
+    }
+  });
+
+  // 右键菜单
+  el.widget.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY);
+  });
+
+  // 点击其他地方关闭右键菜单
+  document.addEventListener('click', () => {
+    const menu = document.querySelector('.widget-context-menu');
+    if (menu) menu.remove();
+  });
+
+  // 更新交互时间（点击 widget 时）
+  el.widget.addEventListener('mousedown', () => {
+    lastInteractionTime = Date.now();
+  });
+}
+
+// ===== 【抽象光球&贴边隐藏迭代】右键菜单 =====
+function showContextMenu(x, y) {
+  // 移除旧菜单
+  const old = document.querySelector('.widget-context-menu');
+  if (old) old.remove();
+
+  const menu = document.createElement('div');
+  menu.className = 'widget-context-menu show';
+
+  const item1 = document.createElement('div');
+  item1.className = 'ctx-item';
+  item1.textContent = '📌 贴边隐藏';
+  item1.addEventListener('click', () => {
+    edgeSnapState = 'docked-right';
+    el.widget.classList.add('docked', 'docked-right');
+    shrinkToWidget();
+    menu.remove();
+  });
+
+  const divider = document.createElement('div');
+  divider.className = 'ctx-divider';
+
+  const item2 = document.createElement('div');
+  item2.className = 'ctx-item';
+  item2.textContent = '⏹ 完全收起';
+  item2.addEventListener('click', () => {
+    edgeSnapState = 'fully-hidden';
+    el.widget.classList.add('fully-hidden');
+    // 窗口缩到最小但保持运行
+    morphWindow(1, 1);
+    try { window.runtime.WindowSetPosition(0, 0); } catch (_) {}
+    menu.remove();
+  });
+
+  menu.appendChild(item1);
+  menu.appendChild(divider);
+  menu.appendChild(item2);
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  document.body.appendChild(menu);
 }
 
 // ── 设置流程 ──
@@ -451,6 +602,7 @@ el.chatInput.addEventListener('keydown', (e) => {
 el.chatSend.addEventListener('click', sendMessage);
 
 // ── 消息系统 ──
+// ===== 【前端情绪可视化迭代】sendMessage — 传递当前 mood =====
 async function sendMessage() {
   const text = el.chatInput.value.trim();
   if (!text || isProcessing) return;
@@ -469,17 +621,17 @@ async function sendMessage() {
     removeTyping();
 
     if (response) {
-      addMessage(response, 'bot');
+      addMessage(response, 'bot', heartbeatState.mood);
     } else {
-      addMessage('（青羽沉默了）', 'bot');
+      addMessage('（青羽沉默了）', 'bot', heartbeatState.mood);
     }
   } catch (err) {
     removeTyping();
     const msg = err.message || '';
     if (msg.includes('脑连接断开') || msg.includes('HTTP')) {
-      addMessage('😅 我好像连不上大脑了，检查一下设置里的中转站地址？', 'bot');
+      addMessage('😅 我好像连不上大脑了，检查一下设置里的中转站地址？', 'bot', heartbeatState.mood);
     } else {
-      addMessage(`😅 出了点小问题：${msg}`, 'bot');
+      addMessage(`😅 出了点小问题：${msg}`, 'bot', heartbeatState.mood);
     }
   } finally {
     isProcessing = false;
@@ -488,16 +640,23 @@ async function sendMessage() {
   }
 }
 
-function addMessage(text, role) {
+// ===== 【抽象光球&贴边隐藏迭代】addMessage — 去拟人化 + 情绪跟随文字色 =====
+function addMessage(text, role, mood) {
   const div = document.createElement('div');
   div.className = `message ${role}`;
 
   const avatar = document.createElement('div');
   avatar.className = 'msg-avatar';
-  avatar.textContent = role === 'bot' ? '青' : '你';
+  // 去拟人化：纯色几何圆，无文字
 
   const content = document.createElement('div');
   content.className = 'msg-content';
+  // bot 消息跟随当前情绪文字色
+  if (role === 'bot' && mood && moodGlowMap[mood]) {
+    content.classList.add(moodGlowMap[mood]);
+  } else if (role === 'bot' && heartbeatState.mood && moodGlowMap[heartbeatState.mood]) {
+    content.classList.add(moodGlowMap[heartbeatState.mood]);
+  }
   content.innerHTML = formatMessage(text);
 
   div.appendChild(avatar);
@@ -530,6 +689,7 @@ function formatMessage(text) {
   return processed;
 }
 
+// ===== 【抽象光球&贴边隐藏迭代】showTyping — 去拟人化 =====
 function showTyping() {
   const div = document.createElement('div');
   div.className = 'message bot';
@@ -537,7 +697,7 @@ function showTyping() {
 
   const avatar = document.createElement('div');
   avatar.className = 'msg-avatar';
-  avatar.textContent = '青';
+  // 去拟人化：纯色几何圆
 
   const content = document.createElement('div');
   content.className = 'msg-content';
@@ -555,15 +715,23 @@ function removeTyping() {
   if (typing) typing.remove();
 }
 
+// ===== 【抽象光球&贴边隐藏迭代】setThinking — 适配双层光球结构 =====
 function setThinking(active) {
   if (active) {
     el.widgetGlow.classList.add('active');
+    el.widgetCore.classList.add('thinking');
     el.widgetStatus.className = 'widget-status thinking';
     el.consoleDot.className = 'console-dot thinking';
   } else {
-    el.widgetGlow.classList.remove('active');
+    el.widgetCore.classList.remove('thinking');
     el.widgetStatus.className = 'widget-status';
     el.consoleDot.className = 'console-dot';
+    // 如果当前有情绪辉光，保留 active
+    if (heartbeatState.mood && moodGlowMap[heartbeatState.mood]) {
+      el.widgetGlow.classList.add('active');
+    } else {
+      el.widgetGlow.classList.remove('active');
+    }
   }
 }
 
@@ -578,20 +746,53 @@ function scrollToBottom() {
   });
 }
 
-// ── 自律消息 ──
+// ===== 【抽象光球&贴边隐藏迭代】proactive_chat 消息 — 去拟人化 =====
+function addProactiveChatMessage(data) {
+  const div = document.createElement('div');
+  div.className = 'message proactive_chat';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  // 去拟人化：纯色几何圆
+
+  const content = document.createElement('div');
+  content.className = 'msg-content';
+
+  // source 标签
+  const sourceDiv = document.createElement('div');
+  sourceDiv.className = 'proactive-source';
+  const source = data.source || '主动';
+  sourceDiv.innerHTML = `💭 ${source} <span class="source-tag">主动</span>`;
+
+  const msgText = document.createElement('div');
+  msgText.innerHTML = formatMessage(data.message);
+
+  content.appendChild(sourceDiv);
+  content.appendChild(msgText);
+
+  div.appendChild(avatar);
+  div.appendChild(content);
+  el.consoleBody.appendChild(div);
+
+  scrollToBottom();
+}
+
+// ===== 【抽象光球&贴边隐藏迭代】自律消息 — 去拟人化 + 情绪标签 =====
 function addAutonomicMessage(data) {
   const div = document.createElement('div');
   div.className = 'message autonomic';
 
   const avatar = document.createElement('div');
   avatar.className = 'msg-avatar';
-  avatar.textContent = '🧠';
+  // 去拟人化：纯色几何圆
 
   const content = document.createElement('div');
   content.className = 'msg-content';
 
   const timeLabel = document.createElement('div');
   timeLabel.className = 'autonomic-time';
+  // 绑定当前情绪 emoji
+  const moodEmoji = moodEmojiMap[heartbeatState.mood] || '💫';
   timeLabel.textContent = `⏺ ${data.timestamp} 自律思考`;
 
   const thoughtText = document.createElement('div');
@@ -608,12 +809,48 @@ function addAutonomicMessage(data) {
     content.appendChild(toolDiv);
   }
 
+  // 情绪标签
+  if (heartbeatState.mood && moodEmojiMap[heartbeatState.mood]) {
+    const moodTag = document.createElement('span');
+    moodTag.className = 'diary-mood-tag';
+    moodTag.textContent = `${moodEmojiMap[heartbeatState.mood]} ${moodNameMap[heartbeatState.mood] || heartbeatState.mood}`;
+    timeLabel.appendChild(moodTag);
+  }
+
   div.appendChild(avatar);
   div.appendChild(content);
   el.consoleBody.appendChild(div);
 
   scrollToBottom();
 }
+
+// ===== 【前端情绪可视化迭代】情绪辉光映射表 =====
+const moodGlowMap = {
+  curious: 'mood-curious',
+  focused: 'mood-focused',
+  calm:    'mood-calm',
+  hollow:  'mood-hollow',
+  aloof:   'mood-aloof',
+  warm:    'mood-warm',
+};
+
+const moodNameMap = {
+  curious: '好奇',
+  focused: '专注',
+  calm:    '平静',
+  hollow:  '空洞',
+  aloof:   '疏离',
+  warm:    '温暖',
+};
+
+const moodEmojiMap = {
+  curious: '🔍',
+  focused: '🎯',
+  calm:    '☁️',
+  hollow:  '🌫️',
+  aloof:   '❄️',
+  warm:    '🌿',
+};
 
 // ── 心跳 UI ──
 const phaseLabels = {
@@ -626,21 +863,109 @@ const phaseGlow = {
   active: true, thinking: true, resting: false, sleeping: false
 };
 
+// ===== 【抽象光球&贴边隐藏迭代】updateHeartbeatUI — 适配双层光球结构 =====
 function updateHeartbeatUI(state) {
+  // widget-status: phase class + mood class
   const cls = phaseClasses[state.phase] || '';
   el.widgetStatus.className = 'widget-status' + (cls ? ' ' + cls : '');
+  const statusMoodClass = moodGlowMap[state.mood];
+  if (statusMoodClass && !cls) {
+    el.widgetStatus.classList.add(statusMoodClass);
+  }
 
+  // 辉光控制：phase 决定是否亮，mood 决定颜色和呼吸
   if (phaseGlow[state.phase]) {
     el.widgetGlow.classList.add('active');
   } else {
     el.widgetGlow.classList.remove('active');
   }
 
+  // 清除旧情绪类，设置新情绪类
+  Object.values(moodGlowMap).forEach(c => el.widgetGlow.classList.remove(c));
+  const glowMoodClass = moodGlowMap[state.mood];
+  if (glowMoodClass && phaseGlow[state.phase]) {
+    el.widgetGlow.classList.add(glowMoodClass);
+  }
+
+  // moodIntensity 控制辉光透明度（0~1 映射到 opacity 0.3~1.0）
+  const intensity = typeof state.moodIntensity === 'number' ? state.moodIntensity : 0.6;
+  const glowOpacity = 0.3 + intensity * 0.7;
+  el.widgetGlow.style.setProperty('--glow-intensity', glowOpacity);
+
+  // ===== 【抽象光球&贴边隐藏迭代】widget-core 内核光点情绪色同步 =====
+  const moodColors = {
+    curious: 'rgba(100, 200, 255, 0.9)',
+    focused: 'rgba(60, 80, 220, 0.9)',
+    calm:    'rgba(140, 180, 170, 0.8)',
+    hollow:  'rgba(160, 130, 200, 0.6)',
+    aloof:   'rgba(180, 190, 200, 0.4)',
+    warm:    'rgba(100, 220, 180, 0.9)',
+  };
+  const moodGlowColors = {
+    curious: 'rgba(100, 200, 255, 0.4)',
+    focused: 'rgba(60, 80, 220, 0.4)',
+    calm:    'rgba(140, 180, 170, 0.25)',
+    hollow:  'rgba(160, 130, 200, 0.2)',
+    aloof:   'rgba(180, 190, 200, 0.08)',
+    warm:    'rgba(100, 220, 180, 0.35)',
+  };
+  if (state.mood && moodColors[state.mood]) {
+    el.widgetCore.style.background = moodColors[state.mood];
+    el.widgetCore.style.boxShadow = `0 0 12px ${moodGlowColors[state.mood]}, 0 0 24px ${moodGlowColors[state.mood]}`;
+    el.widgetOrbit.style.borderColor = moodGlowColors[state.mood];
+  } else {
+    el.widgetCore.style.background = 'var(--accent)';
+    el.widgetCore.style.boxShadow = '0 0 12px var(--accent-glow)';
+    el.widgetOrbit.style.borderColor = 'rgba(255, 255, 255, 0.06)';
+  }
+
+  // idleSeconds > 300 (5min) → 闲置衰减
+  const idleSec = typeof state.idleSeconds === 'number' ? state.idleSeconds : 0;
+  if (idleSec > 300) {
+    el.widgetGlow.classList.add('idle-decay');
+    el.widgetCore.style.opacity = 0.4 + (1 - (idleSec - 300) / 900) * 0.6;
+  } else {
+    el.widgetGlow.classList.remove('idle-decay');
+    el.widgetCore.style.opacity = 1;
+  }
+
+  // 状态点颜色同步情绪
+  if (state.mood && moodGlowMap[state.mood]) {
+    el.consoleDot.className = 'console-dot';
+    el.consoleDot.classList.add(moodGlowMap[state.mood]);
+  }
+
+  // 控制台状态栏更新
   if (!el.console.classList.contains('hidden')) {
     const label = phaseLabels[state.phase] || state.phase;
-    const moodEmoji = { calm: '☁️', curious: '🔍', focused: '🎯', idle: '💤' };
-    const emoji = moodEmoji[state.mood] || '💫';
+    const emoji = moodEmojiMap[state.mood] || '💫';
     el.consoleStatus.textContent = `💓 ${state.beat} · ${label} ${emoji}`;
+
+    // 情绪名
+    const moodName = moodNameMap[state.mood] || state.mood;
+    el.consoleMoodName.textContent = moodName;
+    el.consoleMoodName.className = 'console-mood-name';
+    if (moodGlowMap[state.mood]) {
+      el.consoleMoodName.classList.add(moodGlowMap[state.mood]);
+    }
+
+    // 闲置时间
+    if (idleSec > 0) {
+      const min = Math.floor(idleSec / 60);
+      const sec = idleSec % 60;
+      el.consoleIdleTime.textContent = min > 0 ? `${min}分${sec}秒` : `${sec}秒`;
+      el.consoleIdleTime.classList.remove('hidden');
+    } else {
+      el.consoleIdleTime.textContent = '';
+      el.consoleIdleTime.classList.add('hidden');
+    }
+
+    // 自律思考中标签
+    if (state.autonomic || autonomicActive) {
+      el.consoleAutonomicLabel.classList.remove('hidden');
+    } else {
+      el.consoleAutonomicLabel.classList.add('hidden');
+    }
   }
 }
 

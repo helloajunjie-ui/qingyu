@@ -22,6 +22,7 @@ type Settings struct {
 	Behavior  BehaviorConfig  `json:"behavior"`
 	Paths     PathsConfig     `json:"paths"`
 	Window    WindowConfig    `json:"window"`
+	Models    ModelsConfig    `json:"models"`
 }
 
 type SecurityConfig struct {
@@ -57,6 +58,11 @@ type BehaviorConfig struct {
 	ReactMaxIterations     int `json:"react_max_iterations"`
 	HeartbeatStartDelay    int `json:"heartbeat_start_delay"`
 	AutonomicCheckInterval int `json:"autonomic_check_interval"`
+	// 主动聊天冷却 & 情绪阈值
+	ProactiveChatMinInterval int `json:"proactive_chat_min_interval"` // 主动聊天最小间隔（秒）
+	ProactiveMoodThreshold   int `json:"proactive_mood_threshold"`    // 情绪阈值，仅低于此值才发起主动聊天
+	// 摘要压缩
+	SummarizeInterval int `json:"summarize_interval"` // 每 N 轮自律循环做一次摘要压缩
 }
 
 type PathsConfig struct {
@@ -75,6 +81,12 @@ type WindowConfig struct {
 	Frameless   bool   `json:"frameless"`
 	Transparent bool   `json:"transparent"`
 	DisableIcon bool   `json:"disable_icon"`
+}
+
+// ModelsConfig 分层模型配置
+type ModelsConfig struct {
+	LightModel   string `json:"light_model"`    // 轻量模型名（如 deepseek-chat, gpt-4o-mini）
+	LightBaseURL string `json:"light_base_url"` // 轻量模型中转站地址（可选，默认同主模型）
 }
 
 // 全局单例
@@ -122,10 +134,13 @@ func defaultSettings() *Settings {
 			NetworkFetch: 15,
 		},
 		Behavior: BehaviorConfig{
-			AutonomicSleepSecs:     45,
-			ReactMaxIterations:     3,
-			HeartbeatStartDelay:    3,
-			AutonomicCheckInterval: 3,
+			AutonomicSleepSecs:       45,
+			ReactMaxIterations:       3,
+			HeartbeatStartDelay:      3,
+			AutonomicCheckInterval:   3,
+			ProactiveChatMinInterval: 300, // 5 分钟
+			ProactiveMoodThreshold:   3,   // 情绪值 <= 3 才发起主动聊天
+			SummarizeInterval:        5,   // 每 5 轮摘要一次
 		},
 		Paths: PathsConfig{
 			ConfigFile:   "dna/config.json",
@@ -136,6 +151,10 @@ func defaultSettings() *Settings {
 				"workspace/角色定义.md",
 				"workspace/书柜清单.md",
 			},
+		},
+		Models: ModelsConfig{
+			LightModel:   "", // 默认空，回退到主模型
+			LightBaseURL: "",
 		},
 		Window: WindowConfig{
 			Title:       "青羽",

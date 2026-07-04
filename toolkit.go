@@ -97,7 +97,9 @@ type AuditEntry struct {
 	Detail string `json:"detail"` // 简要描述，不超过 200 字
 }
 
+// ===== human_ext 增量优化：审计日志注入当前情绪标记 =====
 // logAudit 异步写入审计日志（按天轮转，自动清理 30 天前的日志）
+// 每条日志自动追加 current_mood=xxx 字段，用于情绪行为溯源排查
 func logAudit(entryType, action, detail string) {
 	go func() {
 		auditMu.Lock()
@@ -109,11 +111,21 @@ func logAudit(entryType, action, detail string) {
 		today := time.Now().Format("2006-01-02")
 		logPath := filepath.Join(logDir, fmt.Sprintf("audit_%s.log", today))
 
+		// human_ext：追加当前情绪标记
+		moodTag := ""
+		if globalApp != nil && globalApp.moodState != "" {
+			moodTag = "current_mood=" + globalApp.moodState
+		}
+		enrichedDetail := detail
+		if moodTag != "" {
+			enrichedDetail = detail + " | " + moodTag
+		}
+
 		entry := AuditEntry{
 			Time:   time.Now().Format("2006-01-02 15:04:05.000"),
 			Type:   entryType,
 			Action: action,
-			Detail: detail,
+			Detail: enrichedDetail,
 		}
 		data, _ := json.Marshal(entry)
 
