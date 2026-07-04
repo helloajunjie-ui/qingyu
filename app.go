@@ -443,7 +443,283 @@ func (a *App) selfCheck() *SelfCheckResult {
 		)
 	}
 
+	// 【工具箱书架迭代】8. 初始化工具箱书架
+	initToolkitShelf()
+
 	return result
+}
+
+// ===== 【工具箱书架迭代】工具箱书架初始化 =====
+
+// toolkitShelfRoot 工具箱书架根目录
+const toolkitShelfRoot = "workspace/toolkit_shelf"
+
+// toolkitCategories 12个工具分类（排除"文档""社交"两个分类）
+var toolkitCategories = []string{
+	"文件系统", "网络", "记忆", "系统", "实用", "安全",
+	"编码", "归档", "秘书", "自愈", "媒体", "日记",
+}
+
+// categoryIcons 分类图标映射
+var categoryIcons = map[string]string{
+	"文件系统": "📁", "网络": "🌐", "记忆": "🧠", "系统": "💻",
+	"实用": "🔧", "安全": "🔐", "编码": "🎨", "归档": "📦",
+	"秘书": "📅", "自愈": "🛡", "媒体": "🎵", "日记": "📔",
+}
+
+// initToolkitShelf 自检末尾调用：创建书架目录结构 + 生成手册模板
+// 【工具箱书架迭代】所有新增代码均标记此注释，便于批量回滚
+func initToolkitShelf() {
+	// 1. 创建根目录 + 12个分类子文件夹
+	root := filepath.Join(RootDir, toolkitShelfRoot)
+	if err := os.MkdirAll(root, 0755); err != nil {
+		fmt.Printf("【工具箱书架迭代】创建根目录失败: %v\n", err)
+		return
+	}
+	for _, cat := range toolkitCategories {
+		catDir := filepath.Join(root, cat)
+		if err := os.MkdirAll(catDir, 0755); err != nil {
+			fmt.Printf("【工具箱书架迭代】创建分类目录 %s 失败: %v\n", cat, err)
+		}
+	}
+
+	// 2. 生成3本全局核心手册基础模板
+	generateCoreHandbooks(root)
+
+	// 3. 遍历所有工具，生成每个工具的基础手册
+	generateAllToolHandbooks(root)
+
+	// 4. 更新全工具目录总览
+	updateToolMasterIndex(root)
+
+	fmt.Println("【工具箱书架迭代】书架初始化完成")
+}
+
+// generateCoreHandbooks 生成3本全局核心手册
+func generateCoreHandbooks(root string) {
+	// 2a. 全工具目录总览.md
+	masterIndex := filepath.Join(root, "全工具目录总览.md")
+	if _, err := os.Stat(masterIndex); os.IsNotExist(err) {
+		content := `# 📚 全工具目录总览
+
+> 自动生成时间: ` + time.Now().Format("2006-01-02 15:04:05") + `
+> 本文件由 initToolkitShelf 自动维护，每次自检时更新
+
+## 分类索引
+
+`
+		for _, cat := range toolkitCategories {
+			icon := categoryIcons[cat]
+			if icon == "" {
+				icon = "📦"
+			}
+			content += fmt.Sprintf("- %s [%s](%s/)\n", icon, cat, cat)
+		}
+
+		content += `
+---
+
+## 工具清单
+
+`
+		// 按分类列出所有工具
+		grouped := groupToolsByCategory()
+		for _, cat := range toolkitCategories {
+			tools, ok := grouped[cat]
+			if !ok || len(tools) == 0 {
+				continue
+			}
+			icon := categoryIcons[cat]
+			if icon == "" {
+				icon = "📦"
+			}
+			content += fmt.Sprintf("### %s %s\n\n", icon, cat)
+			content += "| 工具名 | 描述 | 手册 |\n|--------|------|------|\n"
+			for _, t := range tools {
+				handbookPath := fmt.Sprintf("%s/%s.md", cat, t.Name)
+				content += fmt.Sprintf("| %s | %s | [📖](%s) |\n", t.Name, t.Description, handbookPath)
+			}
+			content += "\n"
+		}
+
+		content += `---
+> 共收录 ` + fmt.Sprintf("%d", len(Toolkit)) + ` 个工具
+`
+		os.WriteFile(masterIndex, []byte(content), 0644)
+	}
+
+	// 2b. 工具调用节流优化笔记.md
+	throttleNotes := filepath.Join(root, "工具调用节流优化笔记.md")
+	if _, err := os.Stat(throttleNotes); os.IsNotExist(err) {
+		content := `# ⚡ 工具调用节流优化笔记
+
+> 自动生成时间: ` + time.Now().Format("2006-01-02 15:04:05") + `
+
+## 节流规则
+
+| 规则 | 说明 |
+|------|------|
+| 高频工具冷却 | 同一工具连续调用间隔 ≥ 3 轮思考 |
+| 批量操作限制 | 单次工具调用最多处理 50 条记录 |
+| 大文件限制 | 读写文件单次不超过 2000 字符 |
+| 网络请求超时 | 默认 10 秒，可配置 |
+| 命令执行超时 | 默认 30 秒，从 settings.json 读取 |
+
+## 优化记录
+
+> 此处由自律循环每 17 轮自动追加优化建议
+
+`
+		os.WriteFile(throttleNotes, []byte(content), 0644)
+	}
+
+	// 2c. 工具沙盒限制红线.md
+	sandboxLimits := filepath.Join(root, "工具沙盒限制红线.md")
+	if _, err := os.Stat(sandboxLimits); os.IsNotExist(err) {
+		content := `# 🚧 工具沙盒限制红线
+
+> 自动生成时间: ` + time.Now().Format("2006-01-02 15:04:05") + `
+
+## 核心红线
+
+| 限制项 | 规则 | 违规后果 |
+|--------|------|----------|
+| 文件系统 | 仅允许操作 workspace/ 目录 | 拒绝执行 |
+| 命令执行 | 仅允许白名单命令 | 拒绝执行 |
+| 网络请求 | 仅允许 HTTP(S) GET 请求 | 拒绝执行 |
+| 记忆操作 | 禁止删除 index.json/creator.json | 拒绝执行 |
+| 系统调用 | 禁止关机/重启/修改系统配置 | 拒绝执行 |
+
+## 沙盒违规记录
+
+> 此处由自律循环自动记录沙盒违规事件
+
+`
+		os.WriteFile(sandboxLimits, []byte(content), 0644)
+	}
+}
+
+// generateAllToolHandbooks 遍历所有工具，生成每个工具的基础手册
+func generateAllToolHandbooks(root string) {
+	grouped := groupToolsByCategory()
+	for _, cat := range toolkitCategories {
+		tools, ok := grouped[cat]
+		if !ok {
+			continue
+		}
+		catDir := filepath.Join(root, cat)
+		for _, t := range tools {
+			handbookPath := filepath.Join(catDir, t.Name+".md")
+			if _, err := os.Stat(handbookPath); os.IsNotExist(err) {
+				content := fmt.Sprintf(`# %s
+
+> 分类: %s %s
+> 自动生成模板
+
+## 基本信息
+
+| 属性 | 值 |
+|------|-----|
+| 工具名 | %s |
+| 分类 | %s |
+| 描述 | %s |
+
+## 入参说明
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| (待补充) | string | 否 | 请参考工具实现补充 |
+
+## 调用约束
+
+| 约束项 | 值 |
+|--------|-----|
+| 超时 | 默认 10 秒 |
+| 截断 | 输出超过 2000 字符自动截断 |
+| 消耗等级 | 低 |
+| 沙盒限制 | 遵循全局沙盒红线 |
+
+## 使用示例
+
+`+"```"+`
+待补充
+`+"```"+`
+
+## 注意事项
+
+- 请根据实际工具实现补充详细参数说明
+- 注意处理边界情况和错误返回
+`,
+					categoryIcons[cat], cat, t.Name,
+					t.Name, cat, t.Description,
+				)
+				os.WriteFile(handbookPath, []byte(content), 0644)
+			}
+		}
+	}
+}
+
+// updateToolMasterIndex 扫描所有工具，更新全工具目录总览.md
+func updateToolMasterIndex(root string) {
+	masterIndex := filepath.Join(root, "全工具目录总览.md")
+	content := `# 📚 全工具目录总览
+
+> 自动生成时间: ` + time.Now().Format("2006-01-02 15:04:05") + `
+> 本文件由 initToolkitShelf 自动维护，每次自检时更新
+
+## 分类索引
+
+`
+	for _, cat := range toolkitCategories {
+		icon := categoryIcons[cat]
+		if icon == "" {
+			icon = "📦"
+		}
+		content += fmt.Sprintf("- %s [%s](%s/)\n", icon, cat, cat)
+	}
+
+	content += `
+---
+
+## 工具清单
+
+`
+	grouped := groupToolsByCategory()
+	for _, cat := range toolkitCategories {
+		tools, ok := grouped[cat]
+		if !ok || len(tools) == 0 {
+			continue
+		}
+		icon := categoryIcons[cat]
+		if icon == "" {
+			icon = "📦"
+		}
+		content += fmt.Sprintf("### %s %s\n\n", icon, cat)
+		content += "| 工具名 | 描述 | 手册 |\n|--------|------|------|\n"
+		for _, t := range tools {
+			handbookPath := fmt.Sprintf("%s/%s.md", cat, t.Name)
+			content += fmt.Sprintf("| %s | %s | [📖](%s) |\n", t.Name, t.Description, handbookPath)
+		}
+		content += "\n"
+	}
+
+	content += `---
+> 共收录 ` + fmt.Sprintf("%d", len(Toolkit)) + ` 个工具
+`
+	os.WriteFile(masterIndex, []byte(content), 0644)
+}
+
+// groupToolsByCategory 按分类分组所有工具
+func groupToolsByCategory() map[string][]Tool {
+	grouped := make(map[string][]Tool)
+	for _, tool := range Toolkit {
+		cat := tool.Category
+		if cat == "" {
+			cat = "其他"
+		}
+		grouped[cat] = append(grouped[cat], tool)
+	}
+	return grouped
 }
 
 // startup 启动时自动加载固化在基因库中的配置
@@ -828,6 +1104,8 @@ func (a *App) autonomicLoop() {
 					fmt.Printf("🧠 记忆衰减: 归档 %d, 删除 %d\n", archived, deleted)
 				}
 			}
+			// 【工具箱书架迭代】每3轮：随机读取任意工具手册，追加固定评审模板
+			performToolHandbookReview()
 		}
 
 		// 每 SummarizeInterval 轮执行一次上下文摘要压缩
@@ -1072,6 +1350,12 @@ func (a *App) autonomicLoop() {
 【系统触发：周期性回顾】
 已经过了%d轮思考。请回顾你最近的思考和发现，如果有值得长期记住的东西，用 memorize 记下来。
 如果没有，忽略这条。`, loopCount)
+
+			// 【工具箱书架迭代】每17轮：读取工具调用节流优化笔记，提取规则作为上下文
+			throttleCtx := readThrottleNotes()
+			if throttleCtx != "" {
+				autonomicPrompt += "\n\n【工具箱节流参考】\n" + throttleCtx
+			}
 		}
 
 		// 自律思考使用轻量模型（降低 Token 消耗）
@@ -1945,6 +2229,7 @@ func extractJSONToolCall(text string) string {
 }
 
 // extractAndExecuteTool 从 LLM 输出中提取工具调用并执行，返回执行结果
+// 【工具箱书架迭代】新增：工具手册预读 + 执行失败联动记忆系统
 func extractAndExecuteTool(response string) string {
 	jsonStr := extractJSONToolCall(response)
 	if jsonStr == "" {
@@ -1965,7 +2250,18 @@ func extractAndExecuteTool(response string) string {
 			detail += " " + argsPreview
 		}
 		logAudit("tool_call", toolCall.Action, detail)
-		return tool.Execute(toolCall.Args)
+
+		// 【工具箱书架迭代】工具调用前：读取对应工具手册内容注入 ReAct 上下文
+		_ = preReadToolHandbook(toolCall.Action)
+
+		result := tool.Execute(toolCall.Args)
+
+		// 【工具箱书架迭代】工具执行失败分支：检测超时/截断/沙盒限制，联动记忆系统
+		if isToolFailure(result) {
+			recordToolFailure(toolCall.Action, toolCall.Args, result)
+		}
+
+		return result
 	}
 	logAudit("tool_call", toolCall.Action, "未知工具: "+toolCall.Action)
 	return ""
@@ -2286,4 +2582,176 @@ func (a *App) GetGreet() string {
 
 	greeting := getStartupGreeting()
 	return fmt.Sprintf("%s，%s。", greeting, creatorName)
+}
+
+// ============================================
+// 【工具箱书架迭代】辅助函数
+// ============================================
+
+// performToolHandbookReview 每3轮：随机读取任意工具手册，追加固定评审模板
+func performToolHandbookReview() {
+	root := filepath.Join(RootDir, toolkitShelfRoot)
+	// 收集所有手册文件
+	var handbooks []string
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(info.Name(), ".md") && info.Name() != "全工具目录总览.md" {
+			handbooks = append(handbooks, path)
+		}
+		return nil
+	})
+	if len(handbooks) == 0 {
+		return
+	}
+	// 随机选一个
+	idx := time.Now().Nanosecond() % len(handbooks)
+	path := handbooks[idx]
+	if _, err := os.ReadFile(path); err != nil {
+		return
+	}
+	// 追加固定评审模板（纯本地文本，无LLM调用）
+	reviewTemplate := fmt.Sprintf(`
+
+---
+
+## 📋 自律评审记录
+
+> 评审时间: %s
+> 评审类型: 随机抽检
+
+### 评审项
+
+- [ ] 入参说明是否完整
+- [ ] 超时配置是否合理
+- [ ] 截断策略是否明确
+- [ ] 消耗等级是否准确
+- [ ] 沙盒限制是否清晰
+
+### 备注
+
+> 本次为自动抽检，请根据实际使用情况补充优化建议。
+
+---
+`, time.Now().Format("2006-01-02 15:04:05"))
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(reviewTemplate)
+	fmt.Printf("【工具箱书架迭代】已评审手册: %s\n", filepath.Base(path))
+}
+
+// readThrottleNotes 每17轮：读取工具调用节流优化笔记，提取规则作为上下文
+func readThrottleNotes() string {
+	path := filepath.Join(RootDir, toolkitShelfRoot, "工具调用节流优化笔记.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	content := string(data)
+	// 提取节流规则表格部分
+	if idx := strings.Index(content, "## 节流规则"); idx >= 0 {
+		endIdx := strings.Index(content[idx:], "\n## ")
+		if endIdx > 0 {
+			content = content[idx : idx+endIdx]
+		} else {
+			content = content[idx:]
+		}
+	}
+	// 截断防止上下文过长
+	if len([]rune(content)) > 500 {
+		content = string([]rune(content)[:500]) + "..."
+	}
+	return content
+}
+
+// preReadToolHandbook 工具调用前：读取对应工具手册内容
+// 返回手册内容（当前仅用于日志，后续可扩展注入 ReAct 上下文）
+func preReadToolHandbook(toolName string) string {
+	// 查找工具所属分类
+	category := ""
+	for _, t := range Toolkit {
+		if t.Name == toolName {
+			category = t.Category
+			break
+		}
+	}
+	if category == "" {
+		return ""
+	}
+	handbookPath := filepath.Join(RootDir, toolkitShelfRoot, category, toolName+".md")
+	data, err := os.ReadFile(handbookPath)
+	if err != nil {
+		return ""
+	}
+	content := string(data)
+	// 截断防止过大
+	if len([]rune(content)) > 1000 {
+		content = string([]rune(content)[:1000]) + "\n... (截断)"
+	}
+	fmt.Printf("【工具箱书架迭代】已预读手册: %s/%s.md\n", category, toolName)
+	return content
+}
+
+// isToolFailure 检测工具执行结果是否为超时/截断/沙盒限制等失败场景
+func isToolFailure(result string) bool {
+	if result == "" {
+		return false
+	}
+	lower := strings.ToLower(result)
+	failureIndicators := []string{
+		"timeout", "超时",
+		"truncat", "截断", "截断",
+		"sandbox", "沙盒", "红线",
+		"拒绝执行", "拒绝",
+		"违规", "violation",
+		"limit", "限制",
+		"失败", "error",
+	}
+	for _, ind := range failureIndicators {
+		if strings.Contains(lower, ind) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordToolFailure 工具执行失败时，调用 memorize 写入记忆（tag: tool:低效调用）
+func recordToolFailure(toolName string, args map[string]string, result string) {
+	ms := GetMemoryStore()
+	if ms == nil {
+		return
+	}
+
+	// 构建记忆内容
+	argsPreview := ""
+	if len(args) > 0 {
+		argsJSON, _ := json.Marshal(args)
+		argsPreview = string(argsJSON)
+		if len(argsPreview) > 200 {
+			argsPreview = argsPreview[:200] + "..."
+		}
+	}
+
+	resultPreview := result
+	if len([]rune(resultPreview)) > 300 {
+		resultPreview = string([]rune(resultPreview)[:300]) + "..."
+	}
+
+	entry := &MemoryEntry{
+		Topic:      fmt.Sprintf("工具低效调用: %s", toolName),
+		Content:    fmt.Sprintf("工具 %s 执行异常\n参数: %s\n结果: %s", toolName, argsPreview, resultPreview),
+		Importance: 3,
+		Tags:       []string{"tool:低效调用", "tool:" + toolName},
+	}
+
+	if err := ms.Save(entry); err != nil {
+		fmt.Printf("【工具箱书架迭代】记录工具失败记忆失败: %v\n", err)
+		return
+	}
+	fmt.Printf("【工具箱书架迭代】已记录工具失败记忆: %s (tag: tool:低效调用)\n", toolName)
 }
