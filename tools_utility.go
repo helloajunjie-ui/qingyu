@@ -1,3 +1,8 @@
+// 实用工具集
+//
+// 提供时间查询、计算器、UUID 生成、哈希计算、Base64 编解码、
+// CSV 解析、ZIP 压缩/解压、二维码生成等通用工具。
+// 所有工具通过 init() 注册到全局 Toolkit。
 package main
 
 import (
@@ -47,12 +52,17 @@ func init() {
 				return "错误：未提供表达式"
 			}
 
-			re := regexp.MustCompile(`^[0-9+\-*/().,%^sqrt abs sin cos tan log ln pi e\s]+$`)
+			// 严格安全校验：只允许数字、基本运算符、空白和数学函数名
+			// 注意：移除了 % ^ 等可能被利用的符号，% 用 /100 替代
+			re := regexp.MustCompile(`^[0-9+\-*/().,\s]+$`)
 			if !re.MatchString(expr) {
-				return "错误：表达式包含非法字符，只允许数学运算"
+				return "错误：表达式包含非法字符，只允许数字和 + - * / ( ) 运算符"
 			}
 
-			script := fmt.Sprintf("const expr = %s; try { console.log(eval(expr)); } catch(e) { console.log('Error: ' + e.message); }", expr)
+			// 使用 node 的 vm 沙箱执行，避免 eval 的全局作用域注入
+			// 通过 JSON.stringify 对 expr 做二次安全编码，防止注入
+			exprSafe, _ := json.Marshal(expr)
+			script := fmt.Sprintf(`const vm = require('vm'); const s = new vm.Script('const result = ' + %s + '; console.log(result);', {filename: 'calc.js'}); const ctx = {console: console, Math: Math, JSON: JSON, parseInt: parseInt, parseFloat: parseFloat, isNaN: isNaN, isFinite: isFinite}; vm.createContext(ctx); s.runInContext(ctx);`, string(exprSafe))
 			cmd := exec.Command("node", "-e", script)
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout = &stdout
@@ -60,19 +70,20 @@ func init() {
 
 			if err := cmd.Run(); err == nil {
 				result := strings.TrimSpace(stdout.String())
-				if !strings.HasPrefix(result, "Error:") {
+				if !strings.HasPrefix(result, "Error:") && !strings.HasPrefix(result, "SyntaxError:") {
 					return fmt.Sprintf("%s = %s", expr, result)
 				}
 			}
 
-			cmd2 := exec.Command("python", "-c", fmt.Sprintf("import math; print(eval(%s))", expr))
-			cmd2.Stdout = &stdout
-			cmd2.Stderr = &stderr
-			stdout.Reset()
-			stderr.Reset()
+			// 回退：使用 python 安全计算（限制命名空间）
+			pyScript := fmt.Sprintf("import math, json; print(eval(%s, {'__builtins__':{}}, {'math':math, 'abs':abs, 'round':round, 'int':int, 'float':float, 'min':min, 'max':max, 'sum':sum}))", string(exprSafe))
+			cmd2 := exec.Command("python", "-c", pyScript)
+			var stdout2, stderr2 bytes.Buffer
+			cmd2.Stdout = &stdout2
+			cmd2.Stderr = &stderr2
 
 			if err := cmd2.Run(); err == nil {
-				result := strings.TrimSpace(stdout.String())
+				result := strings.TrimSpace(stdout2.String())
 				return fmt.Sprintf("%s = %s", expr, result)
 			}
 
@@ -391,7 +402,16 @@ func init() {
 				os.MkdirAll(target, 0755)
 				count := 0
 				for _, f := range reader.File {
+					// Zip Slip 防护：拒绝路径遍历
+					if strings.Contains(f.Name, "..") || filepath.IsAbs(f.Name) {
+						continue
+					}
 					path := filepath.Join(target, f.Name)
+					// 确保解压路径仍在 target 内
+					if !strings.HasPrefix(filepath.Clean(path), filepath.Clean(target)+string(filepath.Separator)) &&
+						filepath.Clean(path) != filepath.Clean(target) {
+						continue
+					}
 					if f.FileInfo().IsDir() {
 						os.MkdirAll(path, 0755)
 						continue
@@ -401,7 +421,11 @@ func init() {
 					if err != nil {
 						continue
 					}
-					outFile, _ := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+					outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+					if err != nil {
+						rc.Close()
+						continue
+					}
 					io.Copy(outFile, rc)
 					rc.Close()
 					outFile.Close()

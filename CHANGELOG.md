@@ -4,6 +4,33 @@
 
 ---
 
+## [1.4.0] — 2026-07-04
+
+### 修复：运行时稳定性深度检查（15 轮）
+
+- **`go vet` 静态分析**：修复 `tools_media.go:54` 中 `%d` → `%f` 格式动词错误
+- **nil 指针解引用防护**：
+  - `app.go:1957` — `syncWithBrain()` 中 HTTP 请求失败时 `resp` 可能为 nil，拆分为两段条件判断
+  - `tools_memory.go` — 7 处 `GetMemoryStore()` 未判 nil，添加前置检查
+- **goroutine panic 恢复**：为 3 处 goroutine 添加 `defer/recover` 防护
+  - `cache.go:146` — 异步磁盘写入 goroutine
+  - `app.go:1158` — 自律循环备份 goroutine
+  - `tools_network.go:260` — 并发搜索引擎 goroutine
+- **slice 越界修复**：`tools_email.go:281-323` — `parseIMAPAddress`/`parseSMTPAddress` 中 email 不含 `@` 时 `strings.Index` 返回 -1 导致 panic
+- **Zip Slip 路径穿越防护**：
+  - `tools_utility.go:405` — ZIP 解压添加 `..` 和绝对路径检查
+  - `tools_self.go:150` — restore 操作添加路径穿越防护
+  - `tools_email.go:485` — 附件保存使用 `filepath.Base` 过滤
+- **命令超时控制**：`tools_system.go:101` — wmic 命令添加 5s context 超时
+- **文件描述符错误检查**：`tools_utility.go:415` — `os.OpenFile` 错误不再忽略
+- **逻辑错误修复**：`cache.go:200` — `e.IsDir() || !e.IsDir()` 恒真条件改为 `e.IsDir()`
+
+### 优化
+
+- 更新全量文档（CHANGELOG.md / ARCHITECTURE.md）
+
+---
+
 ## [1.3.0] — 2026-07-04
 
 ### 新增：工具箱书架系统（工具认知子系统）

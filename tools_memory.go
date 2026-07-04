@@ -6,8 +6,17 @@ import (
 	"time"
 )
 
+// ============================================
+// 记忆工具集
+// 提供记忆的增删查改接口，供 LLM 通过工具调用使用
+// 底层存储由 memory.go 的 MemoryStore 实现
+// ============================================
+
+// memorize — 存储一条新记忆
+// 参数: content(必填), topic(默认general), importance(1-10,默认5),
+//
+//	tags(空格分隔), links(逗号分隔关联ID)
 func init() {
-	// memorize - 存储记忆
 	Toolkit["memorize"] = Tool{
 		Name:        "memorize",
 		Description: "存储一条记忆到长期记忆系统。支持设置重要性(1-10)、话题标签和关联链接。",
@@ -40,6 +49,9 @@ func init() {
 			}
 
 			store := GetMemoryStore()
+			if store == nil {
+				return "❌ 记忆系统未初始化"
+			}
 			entry := &MemoryEntry{
 				ID:          newUUID(),
 				Topic:       topic,
@@ -60,7 +72,10 @@ func init() {
 		},
 	}
 
-	// recall - 检索记忆
+	// recall — 检索记忆
+	// 参数: keyword(关键词), topic(话题筛选), tags(标签筛选),
+	//       min_importance/max_importance(重要性范围), limit(最大结果数,默认10,最大100),
+	//       sort(排序: importance/recent/access)
 	Toolkit["recall"] = Tool{
 		Name:        "recall",
 		Description: "从长期记忆中检索。支持关键词搜索、话题筛选、重要性过滤。",
@@ -89,6 +104,9 @@ func init() {
 			}
 
 			store := GetMemoryStore()
+			if store == nil {
+				return "❌ 记忆系统未初始化"
+			}
 			results, err := store.Search(query)
 			if err != nil {
 				return fmt.Sprintf("❌ 记忆检索失败: %v", err)
@@ -118,7 +136,10 @@ func init() {
 		},
 	}
 
-	// forget - 删除记忆
+	// forget — 删除记忆
+	// 参数: id(指定ID), topic(按话题批量删除), hard(是否永久删除,默认false=软删除)
+	// 软删除：移入回收站（.trash 目录），可恢复
+	// 永久删除：直接从文件系统移除
 	Toolkit["forget"] = Tool{
 		Name:        "forget",
 		Description: "删除指定ID的记忆，或按话题删除一组记忆。默认软删除(移入回收站)。",
@@ -129,6 +150,9 @@ func init() {
 			hard := args["hard"] == "true"
 
 			store := GetMemoryStore()
+			if store == nil {
+				return "❌ 记忆系统未初始化"
+			}
 
 			if id != "" {
 				if err := store.Delete(id, !hard); err != nil {
@@ -158,7 +182,8 @@ func init() {
 	}
 }
 
-// memory_stats - 记忆系统统计
+// memory_stats — 记忆系统统计
+// 无参数，返回总记忆数、核心记忆数、已归档数、标签数、关联数、话题分布、最近记忆
 func init() {
 	Toolkit["memory_stats"] = Tool{
 		Name:        "memory_stats",
@@ -166,6 +191,9 @@ func init() {
 		Category:    "记忆",
 		Execute: func(args map[string]string) string {
 			store := GetMemoryStore()
+			if store == nil {
+				return "❌ 记忆系统未初始化"
+			}
 			stats := store.Stats()
 
 			var sb strings.Builder
@@ -216,7 +244,9 @@ func init() {
 	}
 }
 
-// memory_link - 记忆关联管理
+// memory_link — 记忆关联管理
+// 参数: action(link/unlink), id1(记忆A), id2(记忆B)
+// 建立关联后，检索时可通过关联链发现相关内容
 func init() {
 	Toolkit["memory_link"] = Tool{
 		Name:        "memory_link",
@@ -232,6 +262,9 @@ func init() {
 			}
 
 			store := GetMemoryStore()
+			if store == nil {
+				return "❌ 记忆系统未初始化"
+			}
 
 			switch action {
 			case "link":
@@ -251,7 +284,9 @@ func init() {
 	}
 }
 
-// migrate_memory - 旧数据迁移
+// migrate_memory — 旧格式记忆迁移
+// 将旧版 .md 格式的记忆文件迁移到新版结构化 JSON 存储
+// 迁移后自动清理旧文件
 func init() {
 	Toolkit["migrate_memory"] = Tool{
 		Name:        "migrate_memory",
@@ -259,6 +294,9 @@ func init() {
 		Category:    "记忆",
 		Execute: func(args map[string]string) string {
 			store := GetMemoryStore()
+			if store == nil {
+				return "❌ 记忆系统未初始化"
+			}
 			count, err := store.MigrateOldFormat()
 			if err != nil {
 				return fmt.Sprintf("❌ 迁移失败: %v", err)
@@ -268,7 +306,9 @@ func init() {
 	}
 }
 
-// decay_memory - 手动触发记忆衰减
+// decay_memory — 手动触发记忆衰减
+// 长期未访问的记忆将降级或归档/删除
+// 衰减策略：低重要性 + 长时间未访问 → 归档；归档后长期未访问 → 删除
 func init() {
 	Toolkit["decay_memory"] = Tool{
 		Name:        "decay_memory",
@@ -276,6 +316,9 @@ func init() {
 		Category:    "记忆",
 		Execute: func(args map[string]string) string {
 			store := GetMemoryStore()
+			if store == nil {
+				return "❌ 记忆系统未初始化"
+			}
 			archived, deleted, err := store.Decay()
 			if err != nil {
 				return fmt.Sprintf("❌ 衰减过程出错: %v", err)

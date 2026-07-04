@@ -1,3 +1,8 @@
+// 文件系统工具集
+//
+// 提供文件/目录的增删改查、搜索、复制、移动等操作。
+// 所有工具通过 init() 注册到全局 Toolkit。
+// 路径安全：非绝对路径自动拼接 RootDir，防止越权访问。
 package main
 
 import (
@@ -5,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -159,7 +165,10 @@ func init() {
 
 			count := 0
 			filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
-				if err != nil || info.IsDir() {
+				if err != nil {
+					return nil // 跳过权限错误等不可访问路径
+				}
+				if info.IsDir() {
 					return nil
 				}
 				if pattern != "" {
@@ -313,32 +322,14 @@ func init() {
 				return "📂 未找到匹配的文件"
 			}
 
-			// 排序
+			// 排序（使用 sort.Slice 替代冒泡排序）
 			switch sortBy {
 			case "size":
-				for i := 0; i < len(files); i++ {
-					for j := i + 1; j < len(files); j++ {
-						if files[j].size < files[i].size {
-							files[i], files[j] = files[j], files[i]
-						}
-					}
-				}
+				sort.Slice(files, func(i, j int) bool { return files[i].size < files[j].size })
 			case "time":
-				for i := 0; i < len(files); i++ {
-					for j := i + 1; j < len(files); j++ {
-						if files[j].mod.Before(files[i].mod) {
-							files[i], files[j] = files[j], files[i]
-						}
-					}
-				}
+				sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
 			default:
-				for i := 0; i < len(files); i++ {
-					for j := i + 1; j < len(files); j++ {
-						if files[j].path < files[i].path {
-							files[i], files[j] = files[j], files[i]
-						}
-					}
-				}
+				sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
 			}
 
 			var sb strings.Builder
@@ -462,7 +453,18 @@ func init() {
 			}
 
 			ext := strings.ToLower(filepath.Ext(path))
-			data, err := os.ReadFile(path)
+			// 只读取文件头部用于元数据检测，避免大文件 OOM
+			headerSize := int64(1024)
+			if info.Size() < headerSize {
+				headerSize = info.Size()
+			}
+			f, err := os.Open(path)
+			if err != nil {
+				return fmt.Sprintf("❌ 读取文件失败: %v", err)
+			}
+			defer f.Close()
+			data := make([]byte, headerSize)
+			_, err = f.Read(data)
 			if err != nil {
 				return fmt.Sprintf("❌ 读取文件失败: %v", err)
 			}

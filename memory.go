@@ -541,8 +541,14 @@ func (ms *MemoryStore) Search(query SearchQuery) ([]*MemoryEntry, error) {
 		if err != nil {
 			continue
 		}
-		// 增加访问计数
+		// 增加访问计数并持久化
 		entry.AccessCount++
+		entry.UpdatedAt = time.Now().Unix()
+		// 写回磁盘以持久化 AccessCount
+		if data, err := json.MarshalIndent(entry, "", "  "); err == nil {
+			os.WriteFile(ms.entryPath(ie.ID, ie.Importance), data, 0644)
+			ms.updateIndex(entry)
+		}
 		result = append(result, entry)
 	}
 

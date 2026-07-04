@@ -367,11 +367,12 @@ async function init() {
       isHovering = true;
       clearTimeout(hoverRetractTimer);
       // 展开为完整光球
+      const wasDockedLeft = edgeSnapState === 'docked-left';
       edgeSnapState = 'normal';
       el.widget.classList.remove('docked', 'docked-left', 'docked-right');
       morphWindow(WIDGET_SIZE, WIDGET_SIZE);
-      // 保持在贴边位置
-      if (edgeSnapState === 'docked-left') {
+      // 保持在贴边位置（使用展开前的状态判断）
+      if (wasDockedLeft) {
         try { window.runtime.WindowSetPosition(0, (window.screen.availHeight - WIDGET_SIZE) / 2); } catch (_) {}
       } else {
         try { window.runtime.WindowSetPosition(window.screen.availWidth - WIDGET_SIZE - MARGIN, (window.screen.availHeight - WIDGET_SIZE) / 2); } catch (_) {}

@@ -1,3 +1,8 @@
+// 邮件工具集
+//
+// 提供 IMAP 邮件接收和 SMTP 邮件发送功能。
+// IMAP 客户端为纯 Go 标准库实现（零外部依赖），支持 TLS。
+// 所有工具通过 init() 注册到全局 Toolkit。
 package main
 
 import (
@@ -291,7 +296,11 @@ func parseIMAPAddress(email string) (server string, port string) {
 	case strings.Contains(email, "foxmail.com"):
 		return "imap.qq.com", "993"
 	}
-	domain := email[strings.Index(email, "@")+1:]
+	atIdx := strings.Index(email, "@")
+	if atIdx < 0 {
+		return "imap." + email, "993"
+	}
+	domain := email[atIdx+1:]
 	return "imap." + domain, "993"
 }
 
@@ -313,7 +322,11 @@ func parseSMTPAddress(email string) (server string, port string) {
 	case strings.Contains(email, "foxmail.com"):
 		return "smtp.qq.com", "465"
 	}
-	domain := email[strings.Index(email, "@")+1:]
+	atIdx := strings.Index(email, "@")
+	if atIdx < 0 {
+		return "smtp." + email, "465"
+	}
+	domain := email[atIdx+1:]
 	return "smtp." + domain, "465"
 }
 
@@ -476,8 +489,14 @@ func parseEmailBody(raw []byte, saveDir string) (bodyText string, attachments []
 				// 确保保存目录存在
 				os.MkdirAll(saveDir, 0755)
 
+				// 路径穿越防护：只允许安全的文件名
+				cleanName := filepath.Base(fileName)
+				if cleanName == "." || cleanName == "/" {
+					continue
+				}
+
 				// 保存到 saveDir
-				savePath := filepath.Join(saveDir, fileName)
+				savePath := filepath.Join(saveDir, cleanName)
 				f, err := os.Create(savePath)
 				if err != nil {
 					continue

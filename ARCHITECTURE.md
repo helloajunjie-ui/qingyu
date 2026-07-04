@@ -1,6 +1,6 @@
 # 青羽 — 系统架构文档
 
-> 版本: 3.0 | 最后更新: 2026-07-04
+> 版本: 3.1 | 最后更新: 2026-07-04
 
 ## 概述
 
@@ -930,7 +930,48 @@ MemoryStore (全局单例)
 - 安全沙盒（命令白名单、路径限制）在代码层强制执行，AI 无法修改
 - 审计日志记录所有拒绝事件，供后续分析
 
-### 15.4 记忆-情绪联动
+### 15.4 运行时稳定性防护
+
+青羽在 15 轮系统性检查中建立了多层运行时防护，覆盖 panic 恢复、nil 指针防护、Zip Slip 路径穿越、goroutine 安全退出等关键场景。
+
+**panic 恢复层：**
+```
+所有 goroutine 入口必须包含 defer/recover
+├── cache.go:146  — 异步磁盘写入 goroutine
+├── app.go:1158   — 自律循环备份 goroutine
+└── tools_network.go:260 — 并发搜索引擎 goroutine
+```
+
+**nil 指针防护层：**
+```
+HTTP 响应处理: app.go:1957 — 拆分为两段条件判断
+  └── 先检查 err != nil，再检查 resp.StatusCode != 200
+      → 防止 err 时 resp 为 nil 导致 panic
+
+记忆系统: tools_memory.go — 7 处 GetMemoryStore() 判 nil
+  └── memorize / recall / forget / memory_stats / memory_link
+      / migrate_memory / decay_memory
+```
+
+**路径穿越防护层：**
+```
+ZIP 解压: tools_utility.go:405 — 拒绝 .. 和绝对路径
+备份恢复: tools_self.go:150   — 同上 + 文件写入错误检查
+附件保存: tools_email.go:485  — filepath.Base 过滤文件名
+```
+
+**资源泄漏防护层：**
+```
+命令超时: tools_system.go:101 — wmic 添加 5s context 超时
+文件描述符: tools_utility.go:415 — os.OpenFile 错误检查
+slice 越界: tools_email.go:281-323 — email 不含 @ 时 Index 返回 -1 防护
+```
+
+**静态分析：**
+- `go vet` 定期执行，捕获格式动词错误（`%d` → `%f`）
+- 逻辑错误检测（`cache.go:200` 恒真条件）
+
+### 15.5 记忆-情绪联动
 
 ```
 memorize(topic, content, importance, tags)

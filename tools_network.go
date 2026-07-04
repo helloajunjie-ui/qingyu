@@ -1,3 +1,9 @@
+// 网络工具集
+//
+// 提供网页抓取、多引擎搜索、RSS 订阅、链接解析、图片分析等网络能力。
+// 所有 HTTP 请求均通过 CachedNetworkCall 缓存，减少重复请求。
+// 超时时间从 settings.json 动态加载。
+// 所有工具通过 init() 注册到全局 Toolkit。
 package main
 
 import (
@@ -252,6 +258,11 @@ func init() {
 				for _, eng := range engineList {
 					eng = strings.TrimSpace(eng)
 					go func(engine string) {
+						defer func() {
+							if r := recover(); r != nil {
+								ch <- result{engine, fmt.Sprintf("[%s] 搜索 panic: %v", engine, r)}
+							}
+						}()
 						var searchURL string
 						switch engine {
 						case "web":

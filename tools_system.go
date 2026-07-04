@@ -1,3 +1,8 @@
+// 系统工具集
+//
+// 提供系统命令执行（白名单沙盒）、环境变量读写、进程管理等功能。
+// 命令白名单从 settings.json 加载，防止任意命令执行。
+// 所有工具通过 init() 注册到全局 Toolkit。
 package main
 
 import (
@@ -93,7 +98,9 @@ func init() {
 				sb.WriteString(fmt.Sprintf("  主机名: %s\n", hostname))
 			}
 			if goruntime.GOOS == "windows" {
-				cmd := exec.Command("wmic", "logicaldisk", "get", "size,freespace,caption", "/format:csv")
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, "wmic", "logicaldisk", "get", "size,freespace,caption", "/format:csv")
 				var stdout bytes.Buffer
 				cmd.Stdout = &stdout
 				if err := cmd.Run(); err == nil {

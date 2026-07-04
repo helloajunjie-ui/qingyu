@@ -1,3 +1,8 @@
+// 自愈工具集
+//
+// 提供自我保护功能：备份、恢复、健康检查、自愈、自动归档。
+// 备份存储在 backups/ 目录，快照存储在 snapshots/ 目录。
+// 所有工具通过 init() 注册到全局 Toolkit。
 package main
 
 import (
@@ -142,15 +147,27 @@ func init() {
 
 				restored := 0
 				for _, f := range zr.File {
+					// Zip Slip 防护
+					if strings.Contains(f.Name, "..") || filepath.IsAbs(f.Name) {
+						continue
+					}
 					targetPath := filepath.Join(RootDir, f.Name)
 					if !strings.HasPrefix(filepath.Clean(targetPath), filepath.Clean(RootDir)) {
 						continue
 					}
 					os.MkdirAll(filepath.Dir(targetPath), 0700)
-					rc, _ := f.Open()
-					data, _ := io.ReadAll(rc)
+					rc, err := f.Open()
+					if err != nil {
+						continue
+					}
+					data, err := io.ReadAll(rc)
 					rc.Close()
-					os.WriteFile(targetPath, data, 0600)
+					if err != nil {
+						continue
+					}
+					if err := os.WriteFile(targetPath, data, 0600); err != nil {
+						continue
+					}
 					restored++
 				}
 				return fmt.Sprintf("♻️ 已从备份 '%s' 恢复 (%d 个文件)\n  恢复前快照已保存至 snapshots/", name, restored)

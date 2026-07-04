@@ -1,3 +1,9 @@
+// PIM（个人信息管理）工具集
+//
+// 提供待办管理（todo）、笔记管理（note）、联系人管理（contact）、
+// 日程管理（schedule）、提醒管理（reminder）等 PIM 功能。
+// 数据以 JSON 文件存储在 workspace/ 目录下。
+// 所有工具通过 init() 注册到全局 Toolkit。
 package main
 
 import (
@@ -76,7 +82,9 @@ func init() {
 				}
 				return fmt.Sprintf("未找到 ID 为 %d 的待办", id)
 			case "clear":
-				pimRemove(todoFile)
+				if err := pimRemove(todoFile); err != nil {
+					return "❌ 清空待办失败: " + err.Error()
+				}
 				return "🗑 已清空所有待办"
 			default:
 				return "错误：action 参数应为 list/add/done/clear"
@@ -222,9 +230,17 @@ func init() {
 				sb.WriteString(fmt.Sprintf("📅 本周日程 (起始 %s)\n", todayStr))
 				sb.WriteString("───\n")
 				found := false
-				weekAhead := now.AddDate(0, 0, 7).Format("2006-01-02")
+				weekAhead := now.AddDate(0, 0, 7)
+				todayParsed, _ := time.Parse("2006-01-02", todayStr)
 				for _, s := range schedules {
-					if len(s.Datetime) >= 10 && s.Datetime[:10] >= todayStr && s.Datetime[:10] <= weekAhead {
+					if len(s.Datetime) < 10 {
+						continue
+					}
+					schedDate, err := time.Parse("2006-01-02", s.Datetime[:10])
+					if err != nil {
+						continue
+					}
+					if (schedDate.Equal(todayParsed) || schedDate.After(todayParsed)) && schedDate.Before(weekAhead.AddDate(0, 0, 1)) {
 						found = true
 						priIcon := map[string]string{"high": "🔴", "normal": "🟡", "low": "🟢"}[s.Priority]
 						if priIcon == "" {
@@ -411,6 +427,11 @@ func init() {
 								pimWrite(remindFile, data, 0644)
 								return fmt.Sprintf("✅ 已确认提醒 [%d]，下次提醒: %s", id, reminders[i].Time)
 							}
+							// time.Parse 失败：时间格式异常，标记为完成并提示
+							reminders[i].Done = true
+							data, _ := json.MarshalIndent(reminders, "", "  ")
+							pimWrite(remindFile, data, 0644)
+							return fmt.Sprintf("⚠️ 提醒 [%d] 时间格式异常 (%s)，已标记完成", id, r.Time)
 						}
 						reminders[i].Done = true
 						data, _ := json.MarshalIndent(reminders, "", "  ")
@@ -983,7 +1004,8 @@ func init() {
 				ID        int    `json:"id"`
 				Title     string `json:"title"`
 				Interval  string `json:"interval"` // daily/weekly/monthly/yearly
-				Day       int    `json:"day"`      // weekly: 1-7, monthly: 1-31
+				Day       int    `json:"day"`      // weekly: 1-7, monthly: 1-31, yearly: 1-31
+				Month     int    `json:"month"`    // yearly: 1-12，其他周期忽略
 				Time      string `json:"time"`     // HH:MM
 				Note      string `json:"note"`
 				LastDone  string `json:"last_done"`
@@ -999,8 +1021,10 @@ func init() {
 			nowStr := now.Format("2006-01-02 15:04:05")
 			todayStr := now.Format("2006-01-02")
 
-			calcNextDue := func(interval string, day int) string {
+			calcNextDue := func(item RecurringItem) string {
 				today := now
+				interval := item.Interval
+				day := item.Day
 				switch interval {
 				case "daily":
 					return todayStr
@@ -1023,9 +1047,16 @@ func init() {
 					}
 					return next.Format("2006-01-02")
 				case "yearly":
-					next := time.Date(today.Year(), time.Month(day/100), day%100, 0, 0, 0, 0, today.Location())
+					month := item.Month
+					if month < 1 || month > 12 {
+						month = 1
+					}
+					if day < 1 || day > 31 {
+						day = 1
+					}
+					next := time.Date(today.Year(), time.Month(month), day, 0, 0, 0, 0, today.Location())
 					if next.Before(today) || next.Equal(today) {
-						next = time.Date(today.Year()+1, next.Month(), next.Day(), 0, 0, 0, 0, today.Location())
+						next = time.Date(today.Year()+1, time.Month(month), day, 0, 0, 0, 0, today.Location())
 					}
 					return next.Format("2006-01-02")
 				}
@@ -1046,6 +1077,12 @@ func init() {
 				if d := args["day"]; d != "" {
 					day, _ = strconv.Atoi(d)
 				}
+				month := 1
+				if interval == "yearly" {
+					if m := args["month"]; m != "" {
+						month, _ = strconv.Atoi(m)
+					}
+				}
 				tm := args["time"]
 				if tm == "" {
 					tm = "09:00"
@@ -1056,21 +1093,22 @@ func init() {
 						maxID = r.ID
 					}
 				}
-				nextDue := calcNextDue(interval, day)
-				items = append(items, RecurringItem{
+				newItem := RecurringItem{
 					ID:        maxID + 1,
 					Title:     title,
 					Interval:  interval,
 					Day:       day,
+					Month:     month,
 					Time:      tm,
 					Note:      args["note"],
-					NextDue:   nextDue,
 					CreatedAt: nowStr,
-				})
+				}
+				newItem.NextDue = calcNextDue(newItem)
+				items = append(items, newItem)
 				data, _ := json.MarshalIndent(items, "", "  ")
 				pimWrite(recFile, data, 0644)
 				intervalLabel := map[string]string{"daily": "每天", "weekly": "每周", "monthly": "每月", "yearly": "每年"}[interval]
-				return fmt.Sprintf("🔄 已添加定期事务 [%d]: %s (%s, 下次: %s %s)", maxID+1, title, intervalLabel, nextDue, tm)
+				return fmt.Sprintf("🔄 已添加定期事务 [%d]: %s (%s, 下次: %s %s)", maxID+1, title, intervalLabel, newItem.NextDue, tm)
 
 			case "list":
 				if len(items) == 0 {
@@ -1125,7 +1163,7 @@ func init() {
 				for i, r := range items {
 					if r.ID == id {
 						items[i].LastDone = nowStr
-						items[i].NextDue = calcNextDue(r.Interval, r.Day)
+						items[i].NextDue = calcNextDue(items[i])
 						data, _ := json.MarshalIndent(items, "", "  ")
 						pimWrite(recFile, data, 0644)
 						return fmt.Sprintf("✅ 已完成 [%d]: %s (下次: %s)", id, r.Title, items[i].NextDue)

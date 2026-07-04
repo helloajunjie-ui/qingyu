@@ -794,6 +794,9 @@ func (a *App) Shutdown() string {
 	farewell := a.getShutdownFarewell()
 	logAudit("system_event", "shutdown", fmt.Sprintf("用户关闭窗口，青羽情绪: %s，告别: %s", a.moodState, farewell))
 
+	// 先停止心跳（不再发送新事件）
+	close(a.heartbeatQuit)
+
 	// 通知自律循环准备退出
 	close(a.autonomicQuit)
 
@@ -804,9 +807,6 @@ func (a *App) Shutdown() string {
 	case <-time.After(30 * time.Second):
 		logAudit("system_event", "shutdown", "等待超时，强制退出")
 	}
-
-	// 停止心跳
-	close(a.heartbeatQuit)
 
 	// 退出进程
 	go func() {
@@ -1013,6 +1013,15 @@ func (a *App) Chat(userInput string) string {
 	a.autonomicRunning = false
 	a.SetHeartbeatPhase("active", "curious")
 
+	// 使用 defer 确保无论 processAgentLoop 是否 panic，都能恢复自律循环
+	// 注意：先等待至少一个心跳周期（1s），确保 autonomicLoop 检测到暂停信号
+	// 再恢复运行，避免 autonomicLoop 在暂停检测窗口内漏检
+	defer func() {
+		time.Sleep(1100 * time.Millisecond) // 略大于心跳间隔，确保 autonomicLoop 进入暂停分支
+		a.autonomicRunning = true
+		a.SetHeartbeatPhase("resting", "calm")
+	}()
+
 	vision := scanRoom()
 
 	// 注入时间感知和环境上下文，让 LLM 根据角色定义自然表达
@@ -1023,10 +1032,6 @@ func (a *App) Chat(userInput string) string {
 %s`, timeContext, userInput)
 
 	result := a.processAgentLoop(vision, contextualInput)
-
-	// 对话结束后恢复自律循环，切换到 resting 心跳相位
-	a.autonomicRunning = true
-	a.SetHeartbeatPhase("resting", "calm")
 
 	return result
 }
@@ -1083,8 +1088,17 @@ func (a *App) autonomicLoop() {
 		}
 
 		if !a.autonomicRunning {
-			// 被 Chat 暂停，休眠 1 秒后重新检查
-			time.Sleep(1 * time.Second)
+			// 被 Chat 暂停，使用 select 监听退出信号，避免 time.Sleep 导致信号丢失
+			select {
+			case <-a.autonomicQuit:
+				fmt.Println("🛑 暂停期间收到退出信号，立即关闭")
+				a.autonomicRunning = false
+				a.finalThinking()
+				close(a.autonomicDone)
+				return
+			case <-time.After(1 * time.Second):
+				// 休眠 1 秒后重新检查
+			}
 			continue
 		}
 
@@ -1142,6 +1156,11 @@ func (a *App) autonomicLoop() {
 		// 每 5 个循环（约 4-6 分钟）自动创建快照存档
 		if loopCount%5 == 0 {
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Printf("[autonomic] 备份 goroutine panic: %v\n", r)
+					}
+				}()
 				backupDir := filepath.Join(RootDir, "backups")
 				os.MkdirAll(backupDir, 0755)
 				timestamp := time.Now().Format("20060102_150405")
@@ -1636,10 +1655,16 @@ func scanRoom() string {
 		if err != nil {
 			return nil
 		}
-		if strings.HasPrefix(info.Name(), ".") || info.Name() == "qingyud.exe" || info.Name() == "qingyud" || info.Name() == "nul" {
+		// 跳过隐藏文件/目录
+		if strings.HasPrefix(info.Name(), ".") {
 			if info.IsDir() && path != RootDir {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		// 跳过编译产物自身（支持 .exe 后缀）
+		baseName := strings.TrimSuffix(info.Name(), ".exe")
+		if baseName == "qingyud" || baseName == "qingyu-ui" {
 			return nil
 		}
 		relPath, _ := filepath.Rel(RootDir, path)
@@ -1934,30 +1959,28 @@ func (a *App) syncWithBrain(visionContext, prompt string) string {
 	resp, err := client.Do(req)
 	elapsed := time.Since(startTime)
 
-	if err != nil || resp.StatusCode != 200 {
-		statusStr := "连接失败"
-		if resp != nil {
-			statusStr = fmt.Sprintf("HTTP %d", resp.StatusCode)
-		} else {
-			statusStr = err.Error()
-		}
-		logAudit("llm_request", "chat", fmt.Sprintf("失败 %s (%v)", statusStr, elapsed))
-		if resp != nil {
-			// 根据状态码给出友好的错误提示
-			switch resp.StatusCode {
-			case 401, 403:
-				return "😅 认证失败，请检查 API Key 是否正确"
-			case 404:
-				return "🤔 找不到对话接口，请检查中转站地址是否正确（需要以 /chat/completions 结尾）"
-			case 429:
-				return "⏳ 请求太频繁了，让我稍等一下再试"
-			case 502, 503:
-				return "🔧 中转站暂时不可用，可能是维护中，稍后再试试吧"
-			default:
-				return fmt.Sprintf("😅 连接中转站出错了（HTTP %d），请检查地址和网络", resp.StatusCode)
-			}
-		}
+	if err != nil {
+		logAudit("llm_request", "chat", fmt.Sprintf("失败 %v (%v)", err, elapsed))
 		return fmt.Sprintf("😅 连不上中转站了：%v", err)
+	}
+
+	if resp.StatusCode != 200 {
+		statusStr := fmt.Sprintf("HTTP %d", resp.StatusCode)
+		logAudit("llm_request", "chat", fmt.Sprintf("失败 %s (%v)", statusStr, elapsed))
+		resp.Body.Close()
+		// 根据状态码给出友好的错误提示
+		switch resp.StatusCode {
+		case 401, 403:
+			return "😅 认证失败，请检查 API Key 是否正确"
+		case 404:
+			return "🤔 找不到对话接口，请检查中转站地址是否正确（需要以 /chat/completions 结尾）"
+		case 429:
+			return "⏳ 请求太频繁了，让我稍等一下再试"
+		case 502, 503:
+			return "🔧 中转站暂时不可用，可能是维护中，稍后再试试吧"
+		default:
+			return fmt.Sprintf("😅 连接中转站出错了（HTTP %d），请检查地址和网络", resp.StatusCode)
+		}
 	}
 	defer resp.Body.Close()
 

@@ -1,3 +1,8 @@
+// Office 文档工具集
+//
+// 提供 Word (.docx)、Excel (.xlsx)、PowerPoint (.pptx) 文档的
+// 读取、创建、修改功能。基于纯 Go 标准库 zip/xml 解析，零外部依赖。
+// 所有工具通过 init() 注册到全局 Toolkit。
 package main
 
 import (
@@ -506,9 +511,11 @@ func extractXlsxText(path, sheetName string) (string, error) {
 		}
 	}
 
-	// 2. 查找目标 sheet
-	targetRID := ""
+	// 2. 查找目标 sheet — 通过 workbook.xml.rels 将 RID 映射到文件名
+	targetSheetFile := "xl/worksheets/sheet1.xml"
 	if sheetName != "" {
+		// 先获取 sheet 名称到 RID 的映射
+		sheetRID := ""
 		for _, f := range r.File {
 			if f.Name == "xl/workbook.xml" {
 				rc, err := f.Open()
@@ -522,7 +529,7 @@ func extractXlsxText(path, sheetName string) (string, error) {
 				if xml.Unmarshal(data, &wb) == nil {
 					for _, s := range wb.Sheets.SheetList {
 						if s.Name == sheetName {
-							targetRID = s.RID
+							sheetRID = s.RID
 							break
 						}
 					}
@@ -530,23 +537,43 @@ func extractXlsxText(path, sheetName string) (string, error) {
 				break
 			}
 		}
-	}
+		// 通过 workbook.xml.rels 将 RID 解析为实际文件路径
+		if sheetRID != "" {
+			for _, f := range r.File {
+				if f.Name == "xl/_rels/workbook.xml.rels" {
+					rc, err := f.Open()
+					if err != nil {
+						break
+					}
+					data, _ := io.ReadAll(rc)
+					rc.Close()
 
-	// 3. 读取 sheet XML
-	var sb strings.Builder
-	for _, f := range r.File {
-		isTarget := false
-		if targetRID != "" {
-			if strings.HasPrefix(f.Name, "xl/worksheets/sheet") && strings.HasSuffix(f.Name, ".xml") {
-				isTarget = true
-			}
-		} else {
-			if f.Name == "xl/worksheets/sheet1.xml" {
-				isTarget = true
+					type relEntry struct {
+						ID     string `xml:"Id,attr"`
+						Target string `xml:"Target,attr"`
+					}
+					type rels struct {
+						Relationships []relEntry `xml:"Relationship"`
+					}
+					var rl rels
+					if xml.Unmarshal(data, &rl) == nil {
+						for _, rel := range rl.Relationships {
+							if rel.ID == sheetRID {
+								targetSheetFile = filepath.Join("xl/worksheets", rel.Target)
+								break
+							}
+						}
+					}
+					break
+				}
 			}
 		}
+	}
 
-		if !isTarget {
+	// 3. 读取目标 sheet XML
+	var sb strings.Builder
+	for _, f := range r.File {
+		if f.Name != targetSheetFile {
 			continue
 		}
 
@@ -850,23 +877,47 @@ func modifyXlsx(path, mode, sheetName, csvData string) error {
 		return fmt.Errorf("CSV 解析失败: %v", err)
 	}
 
-	// 3. 找到目标 sheet 并修改
+	// 3. 找到目标 sheet 并修改 — 通过 workbook.xml.rels 将 RID 映射到文件名
 	targetSheet := "xl/worksheets/sheet1.xml"
 	if sheetName != "" {
-		// 从 workbook.xml 查找 sheet 名称对应的文件
+		// 从 workbook.xml 查找 sheet 名称对应的 RID
+		sheetRID := ""
 		for _, e := range entries {
 			if e.name == "xl/workbook.xml" {
 				var wb xlsxWorkbook
 				if xml.Unmarshal(e.data, &wb) == nil {
 					for _, s := range wb.Sheets.SheetList {
 						if s.Name == sheetName {
-							// 简化：默认 sheet1
-							targetSheet = "xl/worksheets/sheet1.xml"
+							sheetRID = s.RID
 							break
 						}
 					}
 				}
 				break
+			}
+		}
+		// 通过 workbook.xml.rels 将 RID 解析为实际文件路径
+		if sheetRID != "" {
+			for _, e := range entries {
+				if e.name == "xl/_rels/workbook.xml.rels" {
+					type relEntry struct {
+						ID     string `xml:"Id,attr"`
+						Target string `xml:"Target,attr"`
+					}
+					type rels struct {
+						Relationships []relEntry `xml:"Relationship"`
+					}
+					var rl rels
+					if xml.Unmarshal(e.data, &rl) == nil {
+						for _, rel := range rl.Relationships {
+							if rel.ID == sheetRID {
+								targetSheet = filepath.Join("xl/worksheets", rel.Target)
+								break
+							}
+						}
+					}
+					break
+				}
 			}
 		}
 	}
@@ -923,13 +974,14 @@ func modifyXlsx(path, mode, sheetName, csvData string) error {
 			var newRows strings.Builder
 
 			if mode == "replace" {
-				// 替换：直接用新数据
+				// 替换：直接用新数据，使用累积索引避免行列数不一致问题
+				curStrIdx := nextStrIdx
 				for rowIdx, record := range newRecords {
 					newRows.WriteString("<row>")
 					for colIdx := range record {
 						ref := fmt.Sprintf("%s%d", colLetter(colIdx), rowIdx+1)
-						strIdx := nextStrIdx + colIdx + rowIdx*len(record)
-						newRows.WriteString(fmt.Sprintf(`<c r="%s" t="s"><v>%d</v></c>`, ref, strIdx))
+						newRows.WriteString(fmt.Sprintf(`<c r="%s" t="s"><v>%d</v></c>`, ref, curStrIdx))
+						curStrIdx++
 					}
 					newRows.WriteString("</row>")
 				}
@@ -956,13 +1008,14 @@ func modifyXlsx(path, mode, sheetName, csvData string) error {
 					return fmt.Errorf("无法解析工作表结构")
 				}
 
-				// 在 </sheetData> 前插入新行
+				// 在 </sheetData> 前插入新行，使用累积索引
+				curStrIdx := nextStrIdx
 				for rowIdx, record := range newRecords {
 					newRows.WriteString("<row>")
 					for colIdx := range record {
 						ref := fmt.Sprintf("%s%d", colLetter(colIdx), existingRowCount+rowIdx+1)
-						strIdx := nextStrIdx + colIdx + rowIdx*len(record)
-						newRows.WriteString(fmt.Sprintf(`<c r="%s" t="s"><v>%d</v></c>`, ref, strIdx))
+						newRows.WriteString(fmt.Sprintf(`<c r="%s" t="s"><v>%d</v></c>`, ref, curStrIdx))
+						curStrIdx++
 					}
 					newRows.WriteString("</row>")
 				}

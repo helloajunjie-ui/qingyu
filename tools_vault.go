@@ -11,6 +11,31 @@ import (
 	"strings"
 )
 
+// ============================================
+// 密码保险箱工具
+// 使用 AES-256-CBC 加密存储密码
+// 主密码通过 SHA256(salt + masterKey) 验证
+// 数据文件: dna/vault.dat（加密）, dna/.vault_master（主密码哈希）
+// 安全设计：
+//   - 主密码加盐哈希存储，防彩虹表攻击
+//   - 数据使用主密码派生密钥加密
+//   - 文件权限 0600（仅当前用户可读写）
+//   - get 操作自动复制密码到剪贴板
+// ============================================
+
+// vault — 密码保险箱
+// 参数:
+//
+//	action: set_master(设置主密码)/add(添加)/get(获取)/list(列表)/delete(删除)/update(更新)
+//	service: 服务名
+//	username: 用户名
+//	password: 密码
+//	master: 主密码（首次使用需先 set_master）
+//
+// 设计要点：
+//   - 主密码至少 4 位
+//   - 主密码忘记后无法恢复保险箱数据
+//   - update 操作保留旧 username（未提供时）
 func init() {
 	Toolkit["vault"] = Tool{
 		Name:        "vault",
@@ -172,13 +197,17 @@ func init() {
 				if service == "" || password == "" {
 					return "错误：update 需要 service 和 password 参数"
 				}
-				entry, exists := vaultData[service]
-				if !exists {
+				if _, exists := vaultData[service]; !exists {
 					return fmt.Sprintf("❌ 未找到 '%s'，使用 add 添加", service)
 				}
-				entry["password"] = password
+				// 重新构造 entry 避免 map 值拷贝问题
+				entry := map[string]string{"password": password}
 				if username != "" {
 					entry["username"] = username
+				} else if oldEntry, ok := vaultData[service]; ok {
+					if oldUser := oldEntry["username"]; oldUser != "" {
+						entry["username"] = oldUser
+					}
 				}
 				vaultData[service] = entry
 				if err := saveVault(vaultPath, key[:], vaultData); err != nil {

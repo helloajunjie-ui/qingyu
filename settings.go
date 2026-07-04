@@ -10,11 +10,17 @@ import (
 
 // ============================================
 // 青羽的行为基因 — 可配置参数体系
-// 所有 P0/P1 级别的硬编码值统一外移到 settings.json
+// 所有运行时参数统一外移到 dna/settings.json
 // 安全策略和人格定义仍保留在代码中（防止篡改）
+// 设计原则：
+//   - 惰性加载：首次 GetSettings() 时从文件读取
+//   - 线程安全：所有读取通过 RWMutex 保护
+//   - 热更新：ReloadSettings() 可在运行时重新加载
+//   - 自动回退：文件不存在或损坏时使用 defaultSettings()
 // ============================================
 
 // Settings 青羽的完整行为配置
+// 包含安全、心跳、超时、行为、路径、窗口、模型七大模块
 type Settings struct {
 	Security  SecurityConfig  `json:"security"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
@@ -25,10 +31,16 @@ type Settings struct {
 	Models    ModelsConfig    `json:"models"`
 }
 
+// SecurityConfig 安全沙盒配置
+// AllowedCommands: 允许通过 exec 执行的命令白名单
 type SecurityConfig struct {
 	AllowedCommands []string `json:"allowed_commands"`
 }
 
+// HeartbeatConfig 心跳动画配置
+// 控制 UI 心跳脉冲的速率、相位切换和情绪发光模式
+// PhaseRates: 各相位的心跳间隔（毫秒）
+// EmitPatterns: 各速率对应的发射规则（always/mod/every）
 type HeartbeatConfig struct {
 	DefaultRate  int              `json:"default_rate"`
 	DefaultPhase string           `json:"default_phase"`
@@ -41,40 +53,49 @@ type HeartbeatConfig struct {
 	EmitPatterns map[int]EmitRule `json:"emit_patterns"`
 }
 
+// EmitRule 心跳发射规则
+// Pattern: "always"=每次触发, "mod"=每 N 次触发, "every"=每 N 秒触发
 type EmitRule struct {
-	Pattern string `json:"pattern"` // "always", "mod", "every"
+	Pattern string `json:"pattern"`
 	Mod     int    `json:"mod,omitempty"`
 	Offset  int    `json:"offset,omitempty"`
 }
 
+// TimeoutConfig 各模块超时配置（秒）
 type TimeoutConfig struct {
 	HTTPClient   int `json:"http_client"`
 	IMAPSMTP     int `json:"imap_smtp"`
 	NetworkFetch int `json:"network_fetch"`
 }
 
+// BehaviorConfig 行为参数配置
+// 控制自律循环、主动聊天、摘要压缩、网络工具等行为
 type BehaviorConfig struct {
 	AutonomicSleepSecs     int `json:"autonomic_sleep_seconds"`
 	ReactMaxIterations     int `json:"react_max_iterations"`
 	HeartbeatStartDelay    int `json:"heartbeat_start_delay"`
 	AutonomicCheckInterval int `json:"autonomic_check_interval"`
 	// 主动聊天冷却 & 情绪阈值
-	ProactiveChatMinInterval int `json:"proactive_chat_min_interval"` // 主动聊天最小间隔（秒）
-	ProactiveMoodThreshold   int `json:"proactive_mood_threshold"`    // 情绪阈值，仅低于此值才发起主动聊天
+	ProactiveChatMinInterval int `json:"proactive_chat_min_interval"`
+	ProactiveMoodThreshold   int `json:"proactive_mood_threshold"`
 	// 摘要压缩
-	SummarizeInterval int `json:"summarize_interval"` // 每 N 轮自律循环做一次摘要压缩
-	// ===== 【拓展工具集迭代】网络工具全局限制参数 =====
-	WebMaxFetchChars           int `json:"web_max_fetch_chars"`            // 网络抓取最大字符数，默认 10000
-	WebDownloadMaxSize         int `json:"web_download_max_size"`          // 文件下载最大字节数，默认 50MB (52428800)
-	WebProactiveSearchCoolDown int `json:"web_proactive_search_cool_down"` // 主动搜索冷却时间（秒），默认 60
+	SummarizeInterval int `json:"summarize_interval"`
+	// 网络工具全局限制参数
+	WebMaxFetchChars           int `json:"web_max_fetch_chars"`
+	WebDownloadMaxSize         int `json:"web_download_max_size"`
+	WebProactiveSearchCoolDown int `json:"web_proactive_search_cool_down"`
 }
 
+// PathsConfig 关键路径配置
+// CriticalDirs/Files: 自检和备份时重点关注
 type PathsConfig struct {
 	ConfigFile    string   `json:"config_file"`
 	CriticalDirs  []string `json:"critical_dirs"`
 	CriticalFiles []string `json:"critical_files"`
 }
 
+// WindowConfig 窗口配置
+// 支持透明无框模式，用于玻璃拟态 UI
 type WindowConfig struct {
 	Title       string `json:"title"`
 	Width       int    `json:"width"`
@@ -88,23 +109,28 @@ type WindowConfig struct {
 }
 
 // ModelsConfig 分层模型配置
+// LightModel: 轻量模型（处理简单工具调用、摘要、心跳自检）
+// LightBaseURL: 轻量模型中转站（可选，默认同主模型）
+// ToolComputeTier: 工具算力分级映射表（light/heavy）
 type ModelsConfig struct {
-	LightModel   string `json:"light_model"`    // 轻量模型名（如 deepseek-chat, gpt-4o-mini）
-	LightBaseURL string `json:"light_base_url"` // 轻量模型中转站地址（可选，默认同主模型）
-	// ===== 【拓展工具集迭代】工具算力分级映射表 =====
-	// key: 工具名, value: "light" 或 "heavy"
-	// light = 使用轻量模型处理，heavy = 使用主模型处理
+	LightModel      string            `json:"light_model"`
+	LightBaseURL    string            `json:"light_base_url"`
 	ToolComputeTier map[string]string `json:"tool_compute_tier"`
 }
 
 // 全局单例
+// settings: 当前生效的配置指针
+// settingsOnce: 确保只加载一次
+// settingsMu: 读写锁，支持并发读和互斥写
 var (
 	settings     *Settings
 	settingsOnce sync.Once
 	settingsMu   sync.RWMutex
 )
 
-// defaultSettings 返回出厂默认配置（当 settings.json 不存在或损坏时使用）
+// defaultSettings 返回出厂默认配置
+// 当 dna/settings.json 不存在、损坏或解析失败时使用
+// 包含安全的默认值，确保首次运行即可正常工作
 func defaultSettings() *Settings {
 	return &Settings{
 		Security: SecurityConfig{
@@ -221,6 +247,8 @@ func loadSettings() *Settings {
 }
 
 // GetSettings 获取配置（线程安全，惰性加载）
+// 首次调用时从 dna/settings.json 加载，之后返回缓存
+// 使用 RWMutex.RLock 支持并发读取
 func GetSettings() *Settings {
 	settingsOnce.Do(func() {
 		settings = loadSettings()
@@ -231,13 +259,17 @@ func GetSettings() *Settings {
 }
 
 // ReloadSettings 重新加载配置（运行时热更新）
+// 从 dna/settings.json 重新读取并替换内存中的配置
+// 使用写锁保证更新期间的线程安全
 func ReloadSettings() {
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
 	settings = loadSettings()
 }
 
-// SaveSettings 将当前配置写入 dna/settings.json
+// SaveSettings 将配置持久化到 dna/settings.json
+// 先写文件再更新内存，保证崩溃时不会丢失旧配置
+// 文件权限 0600（仅当前用户可读写）
 func SaveSettings(s *Settings) error {
 	path := filepath.Join(RootDir, "dna", "settings.json")
 	dir := filepath.Join(RootDir, "dna")
@@ -261,6 +293,8 @@ func SaveSettings(s *Settings) error {
 }
 
 // InitSettings 初始化配置（在 startup 中调用）
+// 首次运行时自动创建默认 settings.json
+// 后续运行从文件加载到内存
 func InitSettings() {
 	path := filepath.Join(RootDir, "dna", "settings.json")
 	if _, err := os.Stat(path); os.IsNotExist(err) {

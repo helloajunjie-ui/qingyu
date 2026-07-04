@@ -12,25 +12,32 @@ import (
 
 // ============================================
 // 上下文摘要压缩引擎
-// 用轻量模型对对话历史/思考记录做摘要，丢弃原始文本
+// 用轻量模型对对话历史/思考记录做摘要，丢弃原始文本以节省上下文窗口
+// 设计要点：
+//   - 短内容（<100 字）直接返回，不调用 LLM
+//   - 轻量模型优先，未配置时回退到主模型
+//   - LLM 调用失败时回退到简单截断
+//   - 温度 0.3 保证输出稳定性
 // ============================================
 
-// SummarizeRequest 摘要请求
+// SummarizeRequest 摘要请求参数
 type SummarizeRequest struct {
 	Content     string `json:"content"`
-	MaxWords    int    `json:"max_words,omitempty"`    // 目标摘要长度（词数）
-	FocusPoints string `json:"focus_points,omitempty"` // 关注点提示
+	MaxWords    int    `json:"max_words,omitempty"`
+	FocusPoints string `json:"focus_points,omitempty"`
 }
 
 // SummarizeResult 摘要结果
 type SummarizeResult struct {
 	Summary   string `json:"summary"`
-	KeyPoints string `json:"key_points,omitempty"` // 关键要点
-	Emotion   string `json:"emotion,omitempty"`    // 情绪基调
+	KeyPoints string `json:"key_points,omitempty"`
+	Emotion   string `json:"emotion,omitempty"`
 }
 
 // summarizeWithLightModel 使用轻量模型做摘要
 // 如果未配置轻量模型，回退到主模型
+// 短内容（<100 字）直接返回，不浪费 LLM 调用
+// LLM 调用失败时回退到简单截断
 func (a *App) summarizeWithLightModel(content string, maxWords int) string {
 	if content == "" {
 		return ""
@@ -80,7 +87,8 @@ func (a *App) summarizeWithLightModel(content string, maxWords int) string {
 }
 
 // SummarizeThinkingLog 对 thinking 日志做摘要压缩
-// 在 autonomicLoop 每 5 轮调用
+// 在 autonomicLoop 中每 SummarizeInterval 轮调用一次
+// 目标 200 字以内，保留核心思考脉络
 func (a *App) SummarizeThinkingLog(logContent string) string {
 	if logContent == "" {
 		return ""
@@ -90,6 +98,7 @@ func (a *App) SummarizeThinkingLog(logContent string) string {
 }
 
 // SummarizeMemoryContent 对长记忆内容做摘要（归档时使用）
+// 目标 150 字以内，保留关键信息
 func (a *App) SummarizeMemoryContent(content string) string {
 	if content == "" {
 		return ""
@@ -100,17 +109,21 @@ func (a *App) SummarizeMemoryContent(content string) string {
 
 // ============================================
 // 分层模型调度器
+// 根据任务复杂度选择轻量模型或主模型
+// 轻量模型：简单工具调用、心跳自检、时间判断、日记记录
+// 主模型：复杂人格修改、深度思考、对话
 // ============================================
 
-// ModelTier 模型层级
+// ModelTier 模型层级枚举
 type ModelTier int
 
 const (
-	ModelTierLight ModelTier = iota // 轻量模型：简单工具调用、心跳自检、时间判断、日记记录
-	ModelTierMain                   // 主模型：复杂人格修改、深度思考、对话
+	ModelTierLight ModelTier = iota // 轻量模型
+	ModelTierMain                   // 主模型
 )
 
 // GetModelForTier 根据任务层级返回对应的模型配置
+// 如果未配置轻量模型，自动回退到主模型
 func (a *App) GetModelForTier(tier ModelTier) (baseURL, modelName string) {
 	s := GetSettings()
 
@@ -131,7 +144,10 @@ func (a *App) GetModelForTier(tier ModelTier) (baseURL, modelName string) {
 	return
 }
 
-// callLLM 底层 LLM 调用（不注入系统提示，纯 API 调用）
+// callLLM 底层 LLM 调用（纯 API 调用，不注入系统提示）
+// 发送 POST 请求到 {baseURL}/chat/completions
+// 使用 OpenAI 兼容格式，支持任意兼容的 API 提供商
+// 超时 30 秒，失败返回空字符串
 func (a *App) callLLM(baseURL, model string, payload map[string]interface{}) string {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
